@@ -14,6 +14,13 @@ const ViewPaste = () => {
     const paste = pastes.filter((paste) => paste._id === id)[0];
 
     console.log("Paste->", paste);
+    if (!paste) {
+        return (
+            <div className="w-full h-screen flex items-center justify-center">
+                <h1 className="text-2xl font-semibold text-red-500">Paste not found</h1>
+            </div>
+        );
+    }
     return (
         <div className="w-full h-full py-10 max-w-[1200px] mx-auto px-5 lg:px-0">
             <div className="flex flex-col gap-y-5 items-start">
