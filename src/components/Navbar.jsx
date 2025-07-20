@@ -1,32 +1,3 @@
-// import React from 'react'
-// import { NavLink } from 'react-router-dom';
-
-// const Navbar = () => {
-//     return (
-//         <div>
-//             <ul>
-//                 <li>
-//                     <NavLink to='/' className='flex flex-row gap-4 place-content-evenly'>
-//                         home
-//                     </NavLink>
-//                 </li>
-//             </ul>
-//             <ul>
-//                 <li>
-//                     <NavLink to='/pastes'>
-//                         paste
-//                     </NavLink>
-//                 </li>
-//             </ul>
-
-//         </div>
-//     )
-// }
-
-// export default Navbar
-
-
-
 import { NavbarData } from "../data/Navbar";
 import { NavLink } from "react-router-dom";
 const Navbar = () => {
