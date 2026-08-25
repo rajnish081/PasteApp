@@ -128,3 +128,36 @@ After making the changes:
 - Run the project/build if possible and fix any CSS or compilation errors.
 
 Before changing code, inspect the existing components and CSS structure and reuse the existing class names where possible instead of creating unnecessary duplicate styles.
+
+
+
+
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "customers": "Customer",
+    "statements": "Statements",
+    "advice": "Advice",
+    "language": "Language"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Welcome back. Here is your overview for today.",
+    "priorityCustomers": "Priority Customers",
+    "searchPlaceholder": "Search by name or category...",
+    "name": "NAME",
+    "priority": "PRIORITY",
+    "dueDate": "DUE DATE",
+    "category": "CATEGORY",
+    "reason": "REASON",
+    "amount": "AMOUNT",
+    "action": "ACTION"
+  },
+  "common": {
+    "view": "View",
+    "exportReport": "Export Report",
+    "newCustomer": "+ New Customer",
+    "loading": "Loading...",
+    "language": "Language"
+  }
+}
