@@ -295,154 +295,65 @@ export default function DashboardPage() {
 
 
 #hiiiii
-{
-  "app": {
-    "name": "渣打银行",
-    "tagline": "财富核心"
-  },
-  "nav": {
-    "dashboard": "仪表板",
-    "customers": "客户",
-    "statements": "对账单",
-    "advice": "建议书",
-    "logout": "退出登录",
-    "language": "语言"
-  },
-  "common": {
-    "loading": "加载中...",
-    "search": "搜索",
-    "cancel": "取消",
-    "close": "关闭",
-    "save": "保存",
-    "back": "上一步",
-    "next": "下一步",
-    "generate": "生成",
-    "preview": "预览",
-    "download": "下载",
-    "sendEmail": "发送邮件",
-    "language": "语言",
-    "all": "全部",
-    "none": "无",
-    "clearAll": "清除全部",
-    "sortBy": "排序方式",
-    "actions": "操作",
-    "view": "查看",
-    "exportReport": "导出报告",
-    "newCustomer": "+ 新增客户",
-    "noResults": "未找到结果",
-    "selected": "已选择"
-  },
-  "login": {
-    "title": "登录",
-    "subtitle": "客户关系经理门户",
-    "username": "用户编号",
-    "password": "密码",
-    "submit": "登录",
-    "error": "用户编号或密码无效"
-  },
-  "dashboard": {
-    "title": "仪表板",
-    "subtitle": "欢迎回来，以下是您今日的概览。",
-    "priorityCustomers": "重点客户",
-    "searchPlaceholder": "按姓名或类别搜索...",
-    "name": "姓名",
-    "priority": "优先级",
-    "dueDate": "到期日",
-    "category": "类别",
-    "reason": "事由",
-    "amount": "金额",
-    "action": "操作"
-  },
-  "customers": {
-    "title": "客户",
-    "subtitle": "管理并分析您的客户投资组合关系。",
-    "searchPlaceholder": "按姓名或编号搜索",
-    "segment": "客户分层",
-    "allSegments": "全部分层",
-    "aumRange": "资产规模区间",
-    "riskProfile": "风险偏好",
-    "status": "状态",
-    "allStatuses": "全部状态",
-    "customerId": "客户编号",
-    "customerName": "客户姓名",
-    "portfolioValue": "投资组合价值",
-    "products": "产品数",
-    "nextDueEvent": "下次到期/事项",
-    "priority": "优先级",
-    "risk": "风险",
-    "viewDetail": "查看详情",
-    "holdings": "持仓",
-    "transactions": "近期交易",
-    "generateStatement": "生成对账单",
-    "generateAdvice": "生成建议书",
-    "productName": "产品",
-    "value": "价值",
-    "maturity": "到期日",
-    "date": "日期",
-    "description": "摘要"
-  },
-  "statements": {
-    "title": "生成对账单",
-    "subtitle": "请选择本次对账单的客户。",
-    "stepCustomer": "客户",
-    "stepProduct": "产品",
-    "stepTypePeriod": "类型与周期",
-    "stepReview": "复核",
-    "stepGenerate": "生成",
-    "selectCustomer": "选择客户",
-    "searchPlaceholder": "按姓名或客户编号搜索...",
-    "select": "选择",
-    "type": "类型",
-    "selectProducts": "选择产品",
-    "selectProductsHint": "请选择需纳入本对账单的持仓。",
-    "statementType": "对账单类型",
-    "period": "对账单周期",
-    "periodCustom": "自定义范围",
-    "periodLastMonth": "上个月",
-    "periodLastQuarter": "上季度",
-    "periodYearToDate": "年初至今",
-    "from": "起始日期",
-    "to": "结束日期",
-    "documentLanguage": "对账单语言",
-    "outputFormat": "输出格式",
-    "reviewTitle": "复核",
-    "reviewHint": "生成前请确认以下信息。",
-    "statementOfAccounts": "账户对账单",
-    "readySubtitle": "您的对账单已生成，可复核并发送。",
-    "generated": "对账单已成功生成。",
-    "emailed": "对账单已发送至客户。",
-    "generateAnother": "再生成一份"
-  },
-  "advice": {
-    "title": "生成建议书",
-    "subtitle": "为客户复核配置产品建议。",
-    "stepDetails": "详情",
-    "stepReview": "复核",
-    "stepDispatch": "发送",
-    "selectCustomer": "选择客户",
-    "searchPlaceholder": "按姓名或编号搜索",
-    "productFocus": "选择产品方向",
-    "documentSettings": "文档设置",
-    "primaryLanguage": "主要语言",
-    "outputFormat": "输出格式",
-    "notes": "备注",
-    "notesPlaceholder": "添加客户专属说明...",
-    "reviewHint": "发送前请确认建议书信息。",
-    "dispatch": "发送",
-    "generated": "建议书已成功生成。",
-    "emailed": "建议书已发送至客户。",
-    "generateAnother": "再生成一份"
-  },
-  "status": {
-    "active": "生效中",
-    "pending": "待处理",
-    "overdue": "已逾期",
-    "closed": "已结清",
-    "Premium": "尊尚",
-    "Regular": "普通",
-    "High": "高",
-    "Medium": "中",
-    "Low": "低"
-  }
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import en from '../locales/en.json';
+import zhCN from '../locales/zh-CN.json';
+
+// Owner: Rajnish (shared) — US04 / US05.
+// Lightweight i18n: no library, just a dictionary lookup. Add keys to BOTH
+// locales/en.json and locales/zh-CN.json — the key sets must stay identical.
+
+const DICTIONARIES = {
+  en,
+  'zh-CN': zhCN,
+};
+
+export const SUPPORTED_LANGUAGES = [
+  { code: 'en', label: 'English', short: 'EN' },
+  { code: 'zh-CN', label: '简体中文', short: '中文' },
+];
+
+const STORAGE_KEY = 'wealthcore.language';
+
+const LanguageContext = createContext(null);
+
+// Resolves a dotted key like "nav.dashboard" against a nested dictionary.
+function lookup(dictionary, key) {
+  return key.split('.').reduce((node, part) => (node == null ? undefined : node[part]), dictionary);
 }
+
+export function LanguageProvider({ children }) {
+  const [language, setLanguageState] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return DICTIONARIES[saved] ? saved : 'en';
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, language);
+    document.documentElement.lang = language;
+  }, [language]);
+
+  const setLanguage = useCallback((code) => {
+    if (DICTIONARIES[code]) setLanguageState(code);
+  }, []);
+
+  // t('nav.dashboard') -> translated string, falling back to English, then the key
+  // itself so a missing translation is visible instead of rendering blank.
+  const t = useCallback(
+    (key, fallback) =>
+      lookup(DICTIONARIES[language], key) ?? lookup(DICTIONARIES.en, key) ?? fallback ?? key,
+    [language]
+  );
+
+  const value = useMemo(() => ({ language, setLanguage, t }), [language, setLanguage, t]);
+
+  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+}
+
+export function useLanguage() {
+  const ctx = useContext(LanguageContext);
+  if (!ctx) throw new Error('useLanguage must be used inside <LanguageProvider>');
+  return ctx;
+}
+
 #hiiiii
