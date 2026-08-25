@@ -134,30 +134,160 @@ Before changing code, inspect the existing components and CSS structure and reus
 
 {
   "nav": {
-    "dashboard": "Dashboard",
-    "customers": "Customer",
-    "statements": "Statements",
-    "advice": "Advice",
-    "language": "Language"
+    "dashboard": "仪表板",
+    "customers": "客户",
+    "statements": "对账单",
+    "advice": "建议书",
+    "language": "语言"
   },
   "dashboard": {
-    "title": "Dashboard",
-    "subtitle": "Welcome back. Here is your overview for today.",
-    "priorityCustomers": "Priority Customers",
-    "searchPlaceholder": "Search by name or category...",
-    "name": "NAME",
-    "priority": "PRIORITY",
-    "dueDate": "DUE DATE",
-    "category": "CATEGORY",
-    "reason": "REASON",
-    "amount": "AMOUNT",
-    "action": "ACTION"
+    "title": "仪表板",
+    "subtitle": "欢迎回来，以下是您今日的概览。",
+    "priorityCustomers": "重点客户",
+    "searchPlaceholder": "按姓名或类别搜索...",
+    "name": "姓名",
+    "priority": "优先级",
+    "dueDate": "到期日",
+    "category": "类别",
+    "reason": "事由",
+    "amount": "金额",
+    "action": "操作"
   },
   "common": {
-    "view": "View",
-    "exportReport": "Export Report",
-    "newCustomer": "+ New Customer",
-    "loading": "Loading...",
-    "language": "Language"
+    "view": "查看",
+    "exportReport": "导出报告",
+    "newCustomer": "+ 新增客户",
+    "loading": "加载中...",
+    "language": "语言"
   }
+}
+
+
+<!-- language context -->
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import en from '../locales/en.json';
+import zhCN from '../locales/zh-CN.json';
+
+const DICTIONARIES = { en, 'zh-CN': zhCN };
+
+export const SUPPORTED_LANGUAGES = [
+  { code: 'en', label: 'English', short: 'EN' },
+  { code: 'zh-CN', label: '简体中文', short: '中文' },
+];
+
+const STORAGE_KEY = 'wealthcore.language';
+
+const LanguageContext = createContext(null);
+
+// Resolves a dotted key like "nav.dashboard" against the nested JSON.
+function lookup(dictionary, key) {
+  return key.split('.').reduce((node, part) => (node == null ? undefined : node[part]), dictionary);
+}
+
+export function LanguageProvider({ children }) {
+  const [language, setLanguageState] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return DICTIONARIES[saved] ? saved : 'en';
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, language);
+    document.documentElement.lang = language;
+  }, [language]);
+
+  const setLanguage = useCallback((code) => {
+    if (DICTIONARIES[code]) setLanguageState(code);
+  }, []);
+
+  // Falls back to English, then to the key itself — so a missing translation
+  // shows up as visible text instead of rendering blank.
+  const t = useCallback(
+    (key, fallback) =>
+      lookup(DICTIONARIES[language], key) ?? lookup(DICTIONARIES.en, key) ?? fallback ?? key,
+    [language]
+  );
+
+  const value = useMemo(() => ({ language, setLanguage, t }), [language, setLanguage, t]);
+
+  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+}
+
+export function useLanguage() {
+  const ctx = useContext(LanguageContext);
+  if (!ctx) throw new Error('useLanguage must be used inside <LanguageProvider>');
+  return ctx;
+}
+
+<!-- src/components/common/LanguageSwitcher.jsx -->
+import { SUPPORTED_LANGUAGES, useLanguage } from '../../context/LanguageContext';
+
+export default function LanguageSwitcher() {
+  const { language, setLanguage, t } = useLanguage();
+  const active = SUPPORTED_LANGUAGES.find((l) => l.code === language);
+
+  return (
+    <div className="language-pill">
+      <label className="sr-only" htmlFor="language-select">{t('common.language')}</label>
+      <span aria-hidden="true">{t('nav.language')}: {active?.short}</span>
+      <select id="language-select" value={language} onChange={(e) => setLanguage(e.target.value)}>
+        {SUPPORTED_LANGUAGES.map((lang) => (
+          <option key={lang.code} value={lang.code}>{lang.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+
+<!-- css -->
+.language-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: #0473ea;
+  color: #fff;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.language-pill select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.language-pill:focus-within { outline: 2px solid #00285a; outline-offset: 2px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+
+
+import { LanguageProvider } from './context/LanguageContext';
+
+<LanguageProvider>
+  <BrowserRouter>
+    {/* existing app */}
+  </BrowserRouter>
+</LanguageProvider>
+
+
+
+import LanguageSwitcher from '../common/LanguageSwitcher';
+// ...
+<LanguageSwitcher />
+
+
+
+
+
+import { useLanguage } from '../../context/LanguageContext';
+
+export default function DashboardPage() {
+  const { t } = useLanguage();
+  return <h2>{t('dashboard.title')}</h2>;   // was: <h2>Dashboard</h2>
 }
