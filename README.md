@@ -164,3 +164,9 @@ import { SUPPORTED_LANGUAGES, useLanguage } from '../../context/LanguageContext'
   /* Sits invisibly over the pill so the native picker and keyboard focus
      both work while the styled label shows through. */
 }
+
+
+.language-pill:focus-within {
+  outline: 2px solid var(--sc-blue-dark);
+  outline-offset: 2px;
+}
