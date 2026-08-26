@@ -137,26 +137,30 @@ import { SUPPORTED_LANGUAGES, useLanguage } from '../../context/LanguageContext'
 // English and Simplified Chinese are mandatory.
 // Rendered as a pill that cycles through the supported languages; the real
 // <select> underneath keeps it keyboard- and screen-reader-accessible.
-export default function LanguageSwitcher() {
-  const { language, setLanguage, t } = useLanguage();
 
-  const active = SUPPORTED_LANGUAGES.find((l) => l.code === language);
 
-  return (
-    <div className="language-pill">
-      <label className="sr-only" htmlFor="language-select">
-        {t('common.language')}
-      </label>
-      <span aria-hidden="true" className="language-pill__text">
-        {t('nav.language')}: {active?.short}
-      </span>
-      <select id="language-select" value={language} onChange={(e) => setLanguage(e.target.value)}>
-        {SUPPORTED_LANGUAGES.map((lang) => (
-          <option key={lang.code} value={lang.code}>
-            {lang.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
+
+
+/* --- Language pill --- */
+.language-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--sc-blue);
+  color: #fff;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.language-pill select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  /* Sits invisibly over the pill so the native picker and keyboard focus
+     both work while the styled label shows through. */
 }
