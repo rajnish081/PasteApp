@@ -118,755 +118,90 @@ At widths above 768px:
 
 8. Final validation
 
-After making the changes:
 
-- Check the layout at approximately 375px width.
-- Check approximately 768px width.
-- Check desktop width such as 1366px.
-- Make sure there is no unwanted horizontal page scrolling.
-- Make sure every button and important control remains accessible.
-- Run the project/build if possible and fix any CSS or compilation errors.
 
-Before changing code, inspect the existing components and CSS structure and reuse the existing class names where possible instead of creating unnecessary duplicate styles.
 
 
-
-import { SUPPORTED_LANGUAGES, useLanguage } from '../../context/LanguageContext';
-
-// US05 — the RM must be able to change the display language at will.
-// English and Simplified Chinese are mandatory.
-// Rendered as a pill that cycles through the supported languages; the real
-// <select> underneath keeps it keyboard- and screen-reader-accessible.
-
-
-
-
-/* --- Language pill --- */
-.language-pill {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  padding: 8px 16px;
-  border-radius: 999px;
-  background: var(--sc-blue);
-  color: #fff;
-  font-size: 14px;
-  white-space: nowrap;
-}
-
-.language-pill select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  /* Sits invisibly over the pill so the native picker and keyboard focus
-     both work while the styled label shows through. */
-}
-
-
-.language-pill:focus-within {
-  outline: 2px solid var(--sc-blue-dark);
-  outline-offset: 2px;
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-
-#hii
-import {
-  DETAIL_LEVELS,
-  SCOPE_MODES,
-  defaultStatementTypeFor,
-  isTypeAllowed,
-  periodModeFor,
-  toIsoDate,
-} from './statementRules';
-
-// All wizard state in one reducer. The point is the cascade: every mutating
-// action clears what depends on it, so it is impossible to reach Review
-// carrying a statement type that the current selection no longer allows.
-
-export const STEPS = {
-  CUSTOMER: 0,
-  SCOPE: 1,
-  PERIOD: 2,
-  REVIEW: 3,
-  GENERATE: 4,
-};
-
-export const initialState = {
-  step: STEPS.CUSTOMER,
-  furthestStep: STEPS.CUSTOMER,
-  customerId: '',
-  scope: { mode: SCOPE_MODES.SELECTION, productIds: [] },
-  statementType: null,
-  detailLevel: DETAIL_LEVELS.PRODUCT_DETAILS,
-  period: { preset: 'lastMonth', from: '', to: '', asOf: toIsoDate(new Date()) },
-  language: 'en',
-  result: null,
-  message: '',
-  error: '',
-  generating: false,
-};
-
-function clampFurthest(state, step) {
-  return { ...state, furthestStep: Math.min(state.furthestStep, step) };
-}
-
-// Re-checks the chosen type against the new selection. If it is no longer
-// allowed it is cleared rather than silently kept — the RM must pick again.
-function reconcileType(state, customer) {
-  if (!state.statementType) return state;
-  if (isTypeAllowed(state.statementType, state.scope, customer)) return state;
-  return { ...state, statementType: null };
-}
-
-// Switching between a range and an as-of snapshot invalidates the other one.
-function reconcilePeriod(state, previousType) {
-  if (periodModeFor(state.statementType) === periodModeFor(previousType)) return state;
-  return { ...state, period: { ...initialState.period, asOf: toIsoDate(new Date()) } };
-}
-
-export function statementReducer(state, action) {
-  switch (action.type) {
-    case 'SELECT_CUSTOMER': {
-      if (action.customerId === state.customerId) return state;
-      // A different customer invalidates everything downstream.
-      return {
-        ...initialState,
-        period: { ...initialState.period },
-        scope: { ...initialState.scope, productIds: [] },
-        customerId: action.customerId,
-        language: state.language,
-        step: state.step,
-        furthestStep: STEPS.CUSTOMER,
-      };
-    }
-
-    case 'SET_SCOPE_MODE': {
-      const scope =
-        action.mode === SCOPE_MODES.PORTFOLIO
-          ? { mode: SCOPE_MODES.PORTFOLIO, productIds: [] }
-          : { mode: SCOPE_MODES.SELECTION, productIds: [] };
-      const next = clampFurthest({ ...state, scope, statementType: null }, STEPS.SCOPE);
-      return { ...next, statementType: defaultStatementTypeFor(scope, action.customer) };
-    }
-
-    case 'TOGGLE_PRODUCT': {
-      const ids = state.scope.productIds;
-      const productIds = ids.includes(action.productId)
-        ? ids.filter((id) => id !== action.productId)
-        : [...ids, action.productId];
-      const scope = { ...state.scope, productIds };
-      return reconcileType(clampFurthest({ ...state, scope }, STEPS.SCOPE), action.customer);
-    }
-
-    case 'TOGGLE_ACCOUNT': {
-      const own = action.account.products.map((p) => p.id);
-      const allPicked = own.every((id) => state.scope.productIds.includes(id));
-      const productIds = allPicked
-        ? state.scope.productIds.filter((id) => !own.includes(id))
-        : [...new Set([...state.scope.productIds, ...own])];
-      const scope = { ...state.scope, productIds };
-      return reconcileType(clampFurthest({ ...state, scope }, STEPS.SCOPE), action.customer);
-    }
-
-    case 'SET_TYPE': {
-      const next = clampFurthest({ ...state, statementType: action.statementType }, STEPS.SCOPE);
-      return reconcilePeriod(next, state.statementType);
-    }
-
-    case 'SET_DETAIL_LEVEL':
-      return clampFurthest({ ...state, detailLevel: action.detailLevel }, STEPS.SCOPE);
-
-    case 'SET_PERIOD':
-      return clampFurthest(
-        { ...state, period: { ...state.period, ...action.patch } },
-        STEPS.PERIOD
-      );
-
-    case 'SET_LANGUAGE':
-      return clampFurthest({ ...state, language: action.language }, STEPS.PERIOD);
-
-    case 'GO_TO_STEP':
-      return {
-        ...state,
-        step: action.step,
-        furthestStep: Math.max(state.furthestStep, action.step),
-        error: '',
-      };
-
-    case 'GENERATE_START':
-      return { ...state, generating: true, error: '' };
-
-    case 'GENERATE_SUCCESS':
-      return {
-        ...state,
-        generating: false,
-        result: action.result,
-        message: action.message,
-        step: STEPS.GENERATE,
-        furthestStep: STEPS.GENERATE,
-      };
-
-    case 'GENERATE_FAILURE':
-      return { ...state, generating: false, error: action.error };
-
-    case 'SET_MESSAGE':
-      return { ...state, message: action.message };
-
-    case 'RESET':
-      // "Generate another" resets everything except the RM's language choice.
-      return { ...initialState, period: { ...initialState.period }, language: state.language };
-
-    default:
-      return state;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-// Every branching rule for the statement wizard lives here and nowhere else.
-// Pure functions only — no React, no i18n, no formatting. Components read these
-// and never re-derive a rule for themselves.
-
-export const SCOPE_MODES = {
-  PORTFOLIO: 'portfolio',
-  SELECTION: 'selection',
-};
-
-export const TYPES = {
-  ACCOUNT: 'accountStatement',
-  TRANSACTION: 'transactionStatement',
-  PORTFOLIO: 'portfolioStatement',
-  CONSOLIDATED: 'consolidatedWealthStatement',
-};
-
-export const DETAIL_LEVELS = {
-  PRODUCT_DETAILS: 'productDetails',
-  HOLDINGS_SUMMARY: 'holdingsSummary',
-};
-
-export const MAX_RANGE_MONTHS = 24;
-
-// --- selection ----------------------------------------------------------
-// The selection is stored as productIds ONLY. "Account is selected" means
-// every product in it is selected — deriving that instead of storing a second
-// array is what stops the two from drifting out of sync.
-
-export function accountState(account, productIds) {
-  const total = account.products.length;
-  const picked = account.products.filter((p) => productIds.includes(p.id)).length;
-  if (picked === 0) return 'none';
-  return picked === total ? 'all' : 'some';
-}
-
-export function selectionSummary(scope, customer) {
-  const accounts = customer?.accounts || [];
-
-  if (!customer) {
-    return {
-      isEmpty: true, isPortfolio: false, accounts: [], products: [],
-      fullAccounts: [], partialAccounts: [], accountCount: 0, productCount: 0, total: 0,
-    };
-  }
-
-  if (scope.mode === SCOPE_MODES.PORTFOLIO) {
-    const products = accounts.flatMap((a) => a.products);
-    return {
-      isEmpty: products.length === 0,
-      isPortfolio: true,
-      accounts,
-      products,
-      fullAccounts: accounts,
-      partialAccounts: [],
-      accountCount: accounts.length,
-      productCount: products.length,
-      total: products.reduce((sum, p) => sum + p.value, 0),
-    };
-  }
-
-  const ids = scope.productIds || [];
-  const touched = accounts.filter((a) => accountState(a, ids) !== 'none');
-  const products = touched.flatMap((a) => a.products.filter((p) => ids.includes(p.id)));
-
-  return {
-    isEmpty: products.length === 0,
-    isPortfolio: false,
-    accounts: touched,
-    products,
-    fullAccounts: touched.filter((a) => accountState(a, ids) === 'all'),
-    partialAccounts: touched.filter((a) => accountState(a, ids) === 'some'),
-    accountCount: touched.length,
-    productCount: products.length,
-    total: products.reduce((sum, p) => sum + p.value, 0),
-  };
-}
-
-// --- type derivation ----------------------------------------------------
-// The rule, in one sentence: how many ACCOUNTS the selection touches decides
-// which statement types make sense.
-//
-//   portfolio mode      -> Portfolio
-//   1 account touched   -> Account, Transaction
-//   2+ accounts touched -> Consolidated Wealth, Transaction
-//
-// A "partial" account (some products picked) is still one account touched, so
-// the products-only case falls out of the same rule rather than needing its own.
-
-export function allowedStatementTypes(scope, customer) {
-  const summary = selectionSummary(scope, customer);
-  const row = (type, enabled, reasonKey) => ({ type, enabled, reasonKey: enabled ? null : reasonKey });
-
-  if (summary.isPortfolio) {
-    return [
-      row(TYPES.ACCOUNT, false, 'statements.reasonNotForPortfolio'),
-      row(TYPES.TRANSACTION, false, 'statements.reasonNotForPortfolio'),
-      row(TYPES.PORTFOLIO, true),
-      row(TYPES.CONSOLIDATED, false, 'statements.reasonNotForPortfolio'),
-    ];
-  }
-
-  if (summary.isEmpty) {
-    return [
-      row(TYPES.ACCOUNT, false, 'statements.reasonSelectSomething'),
-      row(TYPES.TRANSACTION, false, 'statements.reasonSelectSomething'),
-      row(TYPES.PORTFOLIO, false, 'statements.reasonPortfolioOnly'),
-      row(TYPES.CONSOLIDATED, false, 'statements.reasonSelectSomething'),
-    ];
-  }
-
-  const multiAccount = summary.accountCount >= 2;
-
-  return [
-    row(TYPES.ACCOUNT, !multiAccount, 'statements.reasonSingleAccountOnly'),
-    row(TYPES.TRANSACTION, true),
-    row(TYPES.PORTFOLIO, false, 'statements.reasonPortfolioOnly'),
-    row(TYPES.CONSOLIDATED, multiAccount, 'statements.reasonNeedsTwoAccounts'),
-  ];
-}
-
-export function isTypeAllowed(type, scope, customer) {
-  return allowedStatementTypes(scope, customer).some((r) => r.type === type && r.enabled);
-}
-
-export function defaultStatementTypeFor(scope, customer) {
-  const summary = selectionSummary(scope, customer);
-  if (summary.isPortfolio) return TYPES.PORTFOLIO;
-  if (summary.isEmpty) return null;
-  return summary.accountCount >= 2 ? TYPES.CONSOLIDATED : TYPES.ACCOUNT;
-}
-
-// The detail-level choice only means something for an Account Statement run
-// over part of an account — anywhere else there is nothing to vary.
-export function showsDetailLevel(scope, customer, statementType) {
-  if (statementType !== TYPES.ACCOUNT) return false;
-  const summary = selectionSummary(scope, customer);
-  return summary.accountCount === 1 && summary.partialAccounts.length === 1;
-}
-
-// --- period -------------------------------------------------------------
-
-export function periodModeFor(statementType) {
-  return statementType === TYPES.PORTFOLIO ? 'asOf' : 'range';
-}
-
-function toDate(value) {
-  if (!value) return null;
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function monthsBetween(from, to) {
-  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
-}
-
-export function validatePeriod(period, statementType, today = new Date()) {
-  const errors = {};
-  const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-
-  if (periodModeFor(statementType) === 'asOf') {
-    const asOf = toDate(period.asOf);
-    if (!asOf) errors.asOf = 'statements.errorDateRequired';
-    else if (asOf > endOfToday) errors.asOf = 'statements.errorFuture';
-    return { valid: Object.keys(errors).length === 0, errors };
-  }
-
-  if (period.preset !== 'custom') return { valid: true, errors };
-
-  const from = toDate(period.from);
-  const to = toDate(period.to);
-
-  if (!from) errors.from = 'statements.errorDateRequired';
-  if (!to) errors.to = 'statements.errorDateRequired';
-
-  if (from && to) {
-    if (from > to) errors.from = 'statements.errorFromAfterTo';
-    else if (monthsBetween(from, to) > MAX_RANGE_MONTHS) errors.to = 'statements.errorRangeTooLong';
-  }
-  if (to && to > endOfToday) errors.to = 'statements.errorFuture';
-
-  return { valid: Object.keys(errors).length === 0, errors };
-}
-
-// Turns a preset into the concrete dates it stands for, so Review can show the
-// range the RM is actually about to generate rather than just "Current Year".
-export function resolvePeriodRange(period, statementType, today = new Date()) {
-  if (periodModeFor(statementType) === 'asOf') {
-    return { asOf: period.asOf || toIsoDate(today) };
-  }
-  if (period.preset === 'custom') return { from: period.from, to: period.to };
-
-  const to = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  let from;
-
-  if (period.preset === 'currentYear') {
-    from = new Date(today.getFullYear(), 0, 1);
-  } else {
-    const months = { lastMonth: 1, threeMonths: 3, sixMonths: 6 }[period.preset] ?? 1;
-    from = monthsBefore(to, months);
-  }
-
-  return { from: toIsoDate(from), to: toIsoDate(to) };
-}
-
-// Steps back whole months, clamping to the last valid day of the target month.
-// Without the clamp, 6 months before 29 Aug is 29 Feb — which in a non-leap
-// year silently rolls forward to 1 Mar and quietly shortens the period.
-function monthsBefore(date, months) {
-  const target = new Date(date.getFullYear(), date.getMonth() - months, 1);
-  const lastDayOfMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  target.setDate(Math.min(date.getDate(), lastDayOfMonth));
-  return target;
-}
-
-export function toIsoDate(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-// --- transactions -------------------------------------------------------
-// Which activity belongs in this statement. Account-level selections take the
-// whole ledger for that account; product-level selections take only the rows
-// that reference a selected product.
-
-export function transactionsFor(scope, customer, range) {
-  if (!customer) return [];
-  const summary = selectionSummary(scope, customer);
-  const accountNumbers = summary.accounts.map((a) => a.accountNumber);
-  const productIds = summary.products.map((p) => p.id);
-  const wholeAccounts = summary.fullAccounts.map((a) => a.accountNumber);
-
-  return (customer.transactions || [])
-    .filter((tx) => {
-      if (!accountNumbers.includes(tx.accountNumber)) return false;
-      if (wholeAccounts.includes(tx.accountNumber)) return true;
-      return tx.productId && productIds.includes(tx.productId);
-    })
-    .filter((tx) => {
-      if (!range?.from || !range?.to) return true;
-      return tx.date >= range.from && tx.date <= range.to;
-    })
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-}
-
-
-
-
-
-
-
-
-import {
-  DETAIL_LEVELS,
-  MAX_RANGE_MONTHS,
-  SCOPE_MODES,
-  TYPES,
-  accountState,
-  allowedStatementTypes,
-  defaultStatementTypeFor,
-  periodModeFor,
-  resolvePeriodRange,
-  selectionSummary,
-  showsDetailLevel,
-  transactionsFor,
-  validatePeriod,
-} from './statementRules';
-
-// Two accounts: A has two products, B has one.
-const customer = {
-  id: 'CUST9001',
+# Statement Generation — Frontend Flow Redesign Spec ## Context The Generate Statement wizard in the team project (the app in the screenshots — **not** the local avengers repo, which is a different, older build) has 5 steps: Customer → Product → Type & Period → Review → Generate. The flow is incoherent today: 1. **Step 2 is mislabelled and under-powered.** The hint says "Select the products or accounts to include" but only products are listed. Account Number is a read-only *column*, not a selectable level — so the user can never actually "select an account", even though the whole downstream branching depends on that distinction. 2. **Statement Type is disconnected from the selection.** Step 3 offers all four types unconditionally. You can select a single Bond and pick "Consolidated Wealth Statement", or carefully select two products and pick "Portfolio Statement" — which silently throws that selection away. Nothing validates the combination. 3. **The order is backwards.** The user must fix scope (step 2) before knowing what kind of document they're producing (step 3). Scope only has meaning *relative to* a statement type. 4. **Period is type-blind.** A Portfolio Statement is a point-in-time snapshot; a date *range* is meaningless for it. Custom range has no validation (no From ≤ To, no future-date guard). 5. **Review is noisy.** A "Show 50" page-size selector and pagination controls sit above a 1-row table. **Intended outcome:** the selection drives the statement type, invalid combinations become unreachable rather than merely wrong, and each step only asks what it can meaningfully ask. ### Decisions locked in - **Data model:** an account holds many products. Customer → Account[] → Product[]. The screenshot's flat table is product rows displaying their parent account number. - **Type derivation:** adaptive — what you select determines which statement types are offered. - **Product-level options:** Product-specific details, and Holdings Summary. - **Deliverable:** this spec. Implementation happens in the team repo. ### Assumed data shape The spec assumes this shape. Adjust field names to match the real repo; the structure is what matters.
+js
+Customer {
+  customerId, customerName, type, portfolioValue, riskProfile,
   accounts: [
-    {
-      accountNumber: 'ACC-A',
-      nameKey: 'accounts.deposits',
-      balance: 300,
-      products: [
-        { id: 'PA1', name: 'FD One', type: 'FD', value: 100, accountNumber: 'ACC-A' },
-        { id: 'PA2', name: 'Bond Two', type: 'Bond', value: 200, accountNumber: 'ACC-A' },
-      ],
-    },
-    {
-      accountNumber: 'ACC-B',
-      nameKey: 'accounts.investment',
-      balance: 50,
-      products: [{ id: 'PB1', name: 'Fund Three', type: 'Mutual Fund', value: 50, accountNumber: 'ACC-B' }],
-    },
-  ],
-  transactions: [
-    { id: 'T1', date: '2026-08-10', description: 'FD One interest', amount: 5, productId: 'PA1', accountNumber: 'ACC-A' },
-    { id: 'T2', date: '2026-08-11', description: 'Bond Two buy', amount: -20, productId: 'PA2', accountNumber: 'ACC-A' },
-    { id: 'T3', date: '2026-08-12', description: 'Fund Three buy', amount: -10, productId: 'PB1', accountNumber: 'ACC-B' },
-  ],
-};
-
-const selection = (...productIds) => ({ mode: SCOPE_MODES.SELECTION, productIds });
-const portfolio = { mode: SCOPE_MODES.PORTFOLIO, productIds: [] };
-
-const enabledTypes = (scope) =>
-  allowedStatementTypes(scope, customer)
-    .filter((r) => r.enabled)
-    .map((r) => r.type);
-
-describe('accountState', () => {
-  test('reports none / some / all', () => {
-    expect(accountState(customer.accounts[0], [])).toBe('none');
-    expect(accountState(customer.accounts[0], ['PA1'])).toBe('some');
-    expect(accountState(customer.accounts[0], ['PA1', 'PA2'])).toBe('all');
-  });
-});
-
-describe('selectionSummary', () => {
-  test('counts a partial account as one account touched', () => {
-    const s = selectionSummary(selection('PA1'), customer);
-    expect(s.accountCount).toBe(1);
-    expect(s.productCount).toBe(1);
-    expect(s.partialAccounts).toHaveLength(1);
-    expect(s.fullAccounts).toHaveLength(0);
-    expect(s.total).toBe(100);
-  });
-
-  test('a fully selected account is a full account', () => {
-    const s = selectionSummary(selection('PA1', 'PA2'), customer);
-    expect(s.fullAccounts).toHaveLength(1);
-    expect(s.partialAccounts).toHaveLength(0);
-  });
-
-  test('portfolio mode takes everything', () => {
-    const s = selectionSummary(portfolio, customer);
-    expect(s.isPortfolio).toBe(true);
-    expect(s.accountCount).toBe(2);
-    expect(s.productCount).toBe(3);
-    expect(s.total).toBe(350);
-  });
-
-  test('empty selection is empty', () => {
-    expect(selectionSummary(selection(), customer).isEmpty).toBe(true);
-  });
-
-  test('no customer is handled', () => {
-    expect(selectionSummary(selection('PA1'), null).isEmpty).toBe(true);
-  });
-});
-
-// The derivation matrix — one case per row.
-describe('allowedStatementTypes', () => {
-  test('entire portfolio -> Portfolio only', () => {
-    expect(enabledTypes(portfolio)).toEqual([TYPES.PORTFOLIO]);
-  });
-
-  test('one account fully selected -> Account + Transaction', () => {
-    expect(enabledTypes(selection('PA1', 'PA2'))).toEqual([TYPES.ACCOUNT, TYPES.TRANSACTION]);
-  });
-
-  test('products only within one account -> Account + Transaction', () => {
-    expect(enabledTypes(selection('PA1'))).toEqual([TYPES.ACCOUNT, TYPES.TRANSACTION]);
-  });
-
-  test('two accounts -> Consolidated + Transaction, and NOT Account', () => {
-    const types = enabledTypes(selection('PA1', 'PA2', 'PB1'));
-    expect(types).toEqual([TYPES.TRANSACTION, TYPES.CONSOLIDATED]);
-    expect(types).not.toContain(TYPES.ACCOUNT);
-  });
-
-  test('mixed — one full account plus a loose product elsewhere — is still two accounts', () => {
-    expect(enabledTypes(selection('PA1', 'PA2', 'PB1'))).toContain(TYPES.CONSOLIDATED);
-  });
-
-  test('nothing selected -> nothing enabled', () => {
-    expect(enabledTypes(selection())).toEqual([]);
-  });
-
-  test('disabled options carry a reason', () => {
-    const consolidated = allowedStatementTypes(selection('PA1'), customer).find(
-      (r) => r.type === TYPES.CONSOLIDATED
-    );
-    expect(consolidated.enabled).toBe(false);
-    expect(consolidated.reasonKey).toBe('statements.reasonNeedsTwoAccounts');
-  });
-});
-
-describe('defaultStatementTypeFor', () => {
-  test('picks a sensible default per shape', () => {
-    expect(defaultStatementTypeFor(portfolio, customer)).toBe(TYPES.PORTFOLIO);
-    expect(defaultStatementTypeFor(selection('PA1'), customer)).toBe(TYPES.ACCOUNT);
-    expect(defaultStatementTypeFor(selection('PA1', 'PB1'), customer)).toBe(TYPES.CONSOLIDATED);
-    expect(defaultStatementTypeFor(selection(), customer)).toBeNull();
-  });
-
-  test('every default is itself an allowed type', () => {
-    [portfolio, selection('PA1'), selection('PA1', 'PA2'), selection('PA1', 'PB1')].forEach((scope) => {
-      expect(enabledTypes(scope)).toContain(defaultStatementTypeFor(scope, customer));
-    });
-  });
-});
-
-describe('showsDetailLevel', () => {
-  test('only for an Account Statement over part of one account', () => {
-    expect(showsDetailLevel(selection('PA1'), customer, TYPES.ACCOUNT)).toBe(true);
-    expect(showsDetailLevel(selection('PA1', 'PA2'), customer, TYPES.ACCOUNT)).toBe(false);
-    expect(showsDetailLevel(selection('PA1'), customer, TYPES.TRANSACTION)).toBe(false);
-    expect(showsDetailLevel(portfolio, customer, TYPES.PORTFOLIO)).toBe(false);
-  });
-});
-
-describe('periodModeFor', () => {
-  test('a portfolio statement is a snapshot, everything else is a range', () => {
-    expect(periodModeFor(TYPES.PORTFOLIO)).toBe('asOf');
-    expect(periodModeFor(TYPES.ACCOUNT)).toBe('range');
-    expect(periodModeFor(TYPES.TRANSACTION)).toBe('range');
-    expect(periodModeFor(TYPES.CONSOLIDATED)).toBe('range');
-  });
-});
-
-describe('validatePeriod', () => {
-  const today = new Date(2026, 7, 29); // 29 Aug 2026
-  const range = (from, to) => ({ preset: 'custom', from, to });
-
-  test('presets are always valid', () => {
-    expect(validatePeriod({ preset: 'lastMonth' }, TYPES.ACCOUNT, today).valid).toBe(true);
-    expect(validatePeriod({ preset: 'currentYear' }, TYPES.ACCOUNT, today).valid).toBe(true);
-  });
-
-  test('custom range needs both dates', () => {
-    expect(validatePeriod(range('', ''), TYPES.ACCOUNT, today).errors.from).toBe(
-      'statements.errorDateRequired'
-    );
-  });
-
-  test('rejects From after To', () => {
-    expect(validatePeriod(range('2026-06-01', '2026-05-01'), TYPES.ACCOUNT, today).errors.from).toBe(
-      'statements.errorFromAfterTo'
-    );
-  });
-
-  test('rejects a future To', () => {
-    expect(validatePeriod(range('2026-01-01', '2027-01-01'), TYPES.ACCOUNT, today).errors.to).toBe(
-      'statements.errorFuture'
-    );
-  });
-
-  test(`rejects a range longer than ${MAX_RANGE_MONTHS} months`, () => {
-    expect(validatePeriod(range('2023-01-01', '2026-01-01'), TYPES.ACCOUNT, today).errors.to).toBe(
-      'statements.errorRangeTooLong'
-    );
-  });
-
-  test('accepts a valid range', () => {
-    expect(validatePeriod(range('2026-01-01', '2026-06-01'), TYPES.ACCOUNT, today).valid).toBe(true);
-  });
-
-  test('portfolio validates asOf, not the range', () => {
-    expect(validatePeriod({ asOf: '' }, TYPES.PORTFOLIO, today).errors.asOf).toBe(
-      'statements.errorDateRequired'
-    );
-    expect(validatePeriod({ asOf: '2027-01-01' }, TYPES.PORTFOLIO, today).errors.asOf).toBe(
-      'statements.errorFuture'
-    );
-    expect(validatePeriod({ asOf: '2026-08-01' }, TYPES.PORTFOLIO, today).valid).toBe(true);
-  });
-});
-
-describe('resolvePeriodRange', () => {
-  const today = new Date(2026, 7, 29);
-
-  test('currentYear runs from 1 January', () => {
-    expect(resolvePeriodRange({ preset: 'currentYear' }, TYPES.ACCOUNT, today)).toEqual({
-      from: '2026-01-01',
-      to: '2026-08-29',
-    });
-  });
-
-  test('sixMonths counts back six months', () => {
-    expect(resolvePeriodRange({ preset: 'sixMonths' }, TYPES.ACCOUNT, today).from).toBe('2026-02-28');
-  });
-
-  test('custom passes the dates through', () => {
-    expect(
-      resolvePeriodRange({ preset: 'custom', from: '2026-03-01', to: '2026-04-01' }, TYPES.ACCOUNT, today)
-    ).toEqual({ from: '2026-03-01', to: '2026-04-01' });
-  });
-
-  test('portfolio returns an asOf date', () => {
-    expect(resolvePeriodRange({ asOf: '2026-08-01' }, TYPES.PORTFOLIO, today)).toEqual({
-      asOf: '2026-08-01',
-    });
-  });
-});
-
-describe('transactionsFor', () => {
-  const wide = { from: '2020-01-01', to: '2030-01-01' };
-
-  test('a whole account takes its entire ledger', () => {
-    const ids = transactionsFor(selection('PA1', 'PA2'), customer, wide).map((tx) => tx.id);
-    expect(ids.sort()).toEqual(['T1', 'T2']);
-  });
-
-  test('a product-level selection takes only that product activity', () => {
-    expect(transactionsFor(selection('PA1'), customer, wide).map((tx) => tx.id)).toEqual(['T1']);
-  });
-
-  test('activity outside the range is excluded', () => {
-    expect(
-      transactionsFor(selection('PA1'), customer, { from: '2026-08-11', to: '2026-08-12' })
-    ).toHaveLength(0);
-  });
-
-  test('portfolio mode takes every account', () => {
-    expect(transactionsFor(portfolio, customer, wide)).toHaveLength(3);
-  });
-
-  test('newest first', () => {
-    const dates = transactionsFor(portfolio, customer, wide).map((tx) => tx.date);
-    expect(dates).toEqual([...dates].sort().reverse());
-  });
-});
-
-describe('detail levels', () => {
-  test('are the two the brief asks for', () => {
-    expect(Object.values(DETAIL_LEVELS)).toEqual(['productDetails', 'holdingsSummary']);
-  });
-});
-
+    Account {
+      accountNumber, accountName, accountType,   // 'Savings' | 'Current' | 'Investment' | ...
+      currency, balance,
+      transactions: [ { id, date, description, amount, productId? } ],
+      products: [ Product { productId, productName, productType, amount } ]
+    }
+  ]
+}
+--- ## The redesigned flow Stepper labels stay as they are (Customer · Product · Type & Period · Review · Generate) so the finalised visual design is untouched. What changes is **which decision lives in which step**: Statement Type moves from step 3 up into step 2, where the selection that constrains it is made. ### Step 1 — Customer Keep the screenshot's UI: search box, table (Select radio · Customer ID · Customer Name · Type · Portfolio Value · Risk Profile), "Showing X to Y of Z customers", page-size selector, pager. Additions: - **Selected-customer preview panel** below the table, appearing on selection. This delivers your "shows customer products → shows customer account" without adding a step:
+Priya Nair (CUST1002) · Regular · Conservative
+  2 accounts · 3 products · ₹15,12,000
+    50123456002   Savings      ₹5,62,000    2 products
+    901234560002  Investment   ₹14,50,000   1 product
+Read-only here. Selection happens in step 2. - **Gate:** Continue disabled until a customer is selected. - **Cascade:** changing the customer clears *all* downstream state (scope, type, detail level, period, and the furthest-reached step). This is the single most common source of a corrupt wizard. ### Step 2 — Scope & Statement Type This step now carries both halves of your STEP 2 text. Two panels, the second revealed by the first. **Panel A — Include**
+java
+( ) Entire portfolio        — every account and product for this customer
+(•) Selected accounts and products
+Choosing "Entire portfolio" collapses the table and forces type = Portfolio Statement. Choosing "Selected…" reveals a **grouped, two-level table**:
+css
+Select   Account / Product              Account Number    Amount
+ [✓]     ▾ Savings                      50123456002       ₹5,62,000
+   [✓]       Bond                       50123456002         ₹62,000
+   [ ]       SC Fixed Deposit           50123456002       ₹5,00,000
+ [ ]     ▾ Investment                   901234560002      ₹14,50,000
+   [ ]       Portfolio Management       901234560002      ₹14,50,000
+- Account row checkbox is **tri-state**: checked (all products), indeterminate (some), unchecked. - Checking an account checks all its products; unchecking clears them. - Account rows are collapsible; keep them expanded by default. - Pagination applies to *account groups*, not product rows, so a group is never split across pages. **Panel B — Statement Type** — renders as soon as the selection is non-empty. Only valid types are enabled; invalid ones stay visible but disabled with a one-line reason, so the rule is learnable rather than mysterious. | SelectionEnabled typesDefault | | | | ------------------------------------------------- | ---------------------------------------------------- | ----------------------------- | | Entire portfolio | Portfolio Statement | Portfolio Statement | | Exactly 1 account, fully selected | Account Statement, Transaction Statement | Account Statement | | 2+ accounts, fully selected | Consolidated Wealth Statement, Transaction Statement | Consolidated Wealth Statement | | Products only (partial account) | Account Statement, Transaction Statement | Account Statement | | Mixed (1 full account + loose products elsewhere) | Consolidated Wealth Statement | Consolidated Wealth Statement | Disabled-reason copy: - Portfolio Statement → "Select 'Entire portfolio' to generate a portfolio statement." - Consolidated Wealth Statement → "Requires two or more accounts." - Account Statement → "Not available for a whole-portfolio scope." **Panel C — Detail level** — shown only when the selection is **product-level** (partial account) and type is Account Statement. This is your "product specific details / what else":
+css
+(•) Product-specific details   — one section per selected product, with its own holdings and activity
+( ) Holdings summary           — a single combined table of the selected products with a grand total
+**Gate:** Continue requires a non-empty selection **and** a chosen (valid) statement type. **Cascade:** any change to the selection re-runs the derivation. If the currently chosen type is no longer in the enabled set, clear it and require a fresh pick — do not silently keep an invalid type. ### Step 3 — Period & Language Statement Type is **gone from this step**. What remains is type-aware. **Statement Period** - Types Account | Transaction | Consolidated Wealth → the screenshot's radio group: Last Month · 3 Months · 6 Months · Current Year · Custom range (From / To). - Type Portfolio Statement → replace the group with a single **"As of date"** field (default: today). A snapshot has no range. **Custom range validation** (currently absent): - Both dates required. - From ≤ To. - To ≤ today. - Range ≤ 24 months. Show the error inline under the offending field and keep Continue disabled while invalid. **Output Language** — unchanged: English / Simplified Chinese radio cards. **Gate:** valid period (or a valid as-of date). ### Step 4 — Review Read-only, and it must reflect the *actual* branch taken:
+sql
+Customer            Priya Nair (CUST1002)
+Scope               2 products across 1 account
+Statement Type      Account Statement — Product-specific details
+Statement Period    Current Year (01-Jan-2026 – 29-Aug-2026)
+Output Language     English
+- Each row gets an **Edit** link jumping to its owning step (faster than the stepper, and it makes the back-jump path explicit). - **Included items** table grouped by account, with an account subtotal and a grand **Total** row. - **Remove pagination when rows ≤ page size.** The "Show 50" control over a 1-row table is noise. ### Step 5 — Generate Generating → document preview → Download · Email · Generate another. "Generate another" must reset the *whole* wizard including type and period, not just customer and products. --- ## Cross-cutting changes These are what actually stop the flow degenerating into a mess again. **1. One step config, not parallel arrays.** Replace index-parallel STEP_KEYS / SUBTITLE_KEYS plus hard-coded step === 3 comparisons with a single array:
+js
+const STEPS = [
+  { id: 'customer',  labelKey, subtitleKey, isValid: (s) => Boolean(s.customerId) },
+  { id: 'scope',     labelKey, subtitleKey, isValid: (s) => hasSelection(s) && isTypeValid(s) },
+  { id: 'period',    labelKey, subtitleKey, isValid: (s) => isPeriodValid(s) },
+  { id: 'review',    labelKey, subtitleKey, isValid: () => true },
+  { id: 'generate',  labelKey, subtitleKey, isValid: () => true },
+];
+Navigation becomes STEPS[step].isValid(state). Adding or reordering a step stops being a three-place edit. **2. Reducer, not scattered&#xA0;****useState****.** The cascade rules are the core of this redesign and they are cross-field, so put wizard state in a useReducer:
+js
+{ step, furthestStep, customerId,
+  scope: { mode: 'portfolio' | 'selection', accountNumbers: [], productIds: [] },
+  statementType: null,
+  detailLevel: 'productDetails' | 'holdingsSummary',
+  period: { preset, from, to, asOf },
+  language: 'en' }
+Actions: SELECT_CUSTOMER, SET_SCOPE_MODE, TOGGLE_ACCOUNT, TOGGLE_PRODUCT, SET_TYPE, SET_DETAIL_LEVEL, SET_PERIOD, SET_LANGUAGE, GO_TO_STEP, RESET. Each mutating action clears everything downstream of it. Centralising this in the reducer is what prevents the stale-state bugs the current flow has. **3. Pure derivation module** — statementRules.js, framework-free and unit-testable:
+js
+allowedStatementTypes(scope, customer) -> [{ type, enabled, reason }]
+defaultStatementTypeFor(scope, customer) -> type
+periodModeFor(statementType) -> 'range' | 'asOf'
+validatePeriod(period, statementType) -> { valid, errors }
+selectionSummary(scope, customer) -> { accountCount, productCount, total }
+Every branching rule in this spec lives here and nowhere else. The step components read it; they never re-implement it. **4. Furthest-step clamp.** Track furthestStep. The stepper allows back-jumps to any completed step, but after an edit invalidates a later step, clamp furthestStep back so the user cannot skip forward over a now-invalid step. **5. One&#xA0;****<PaginatedTable>****.** Steps 1, 2 and 4 currently each carry their own copy of page-size + "Showing X to Y of Z" + pager. Extract one component that also **auto-hides its controls when&#xA0;****rows.length <= pageSize**. This alone removes the odd "Show 50 / Showing 1 to 1 of 1" on Review. **6. Cancel needs a confirm.** The footer's Cancel currently discards silently. Confirm before discarding when any selection has been made. **7. Empty and error states.** Customer with no accounts; account with no products; search with no matches; generation failure. Each needs its own message — today they render as blank tables. **8. Deep-link entry.** Entering the wizard from a customer row should pre-fill step 1 and open on step 2, rather than making the RM re-find the customer they just had open. --- ## Suggested file layout
+typescript
+features/statements/
+  StatementPage.jsx          parent: reducer, stepper, footer nav only — no step markup
+  statementRules.js          pure derivation + validation (item 3)
+  steps/
+    StepCustomer.jsx         table + search + selected-customer preview panel
+    StepScope.jsx            Panel A/B/C — grouped table, type picker, detail level
+    StepPeriod.jsx           type-aware period + language
+    StepReview.jsx           summary + edit links + grouped items table
+    StepGenerate.jsx         progress, preview, download/email
+components/ui/
+  PaginatedTable.jsx         shared, auto-hiding controls (item 5)
+  GroupedSelectTable.jsx     two-level tri-state checkbox table (step 2)
+StatementPage.jsx should end up a thin shell: state + which step renders + footer. All step markup moves out. --- ## Verification 1. **Rules first.** Unit-test statementRules.js against the derivation table above — every row, plus mixed selection, empty selection, single-account-with-one-product, and portfolio mode. 2. **Cascade tests.** Complete the wizard to step 4, jump back to step 1, change the customer → assert scope, type, period and furthestStep all reset. Repeat for a step-2 selection change that invalidates the chosen type (select 2 accounts → pick Consolidated Wealth → go back and deselect one account → assert type is cleared, not silently kept). 3. **Period tests.** Portfolio Statement renders "As of date" and no range. Custom range rejects From > To, a future To, and a range over 24 months, with Continue disabled. 4. **Path walkthroughs** in the running app — one per branch: - single account → Account Statement - single account → Transaction Statement - two accounts → Consolidated Wealth Statement - two products in one account → Account Statement / Product-specific details - same selection → Holdings summary - entire portfolio → Portfolio Statement Confirm each Review page states the right type and scope, and each generated document matches. 5. **Regression:** existing wizard tests will break on the moved Statement Type control and the new step-2 markup — update selectors as part of the change, don't skip them. --- ## Open question Transaction Statement is offered for product-level selections on the assumption that the account's ledger can be filtered to those products (i.e. transactions carry a productId). If the real transaction records have no product link, drop Transaction Statement from the "Products only" row of the derivation table — it can then only be offered at account level. can u tell both the ideas are same or if there is difference which one is better?
 
 
 
