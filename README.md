@@ -205,3 +205,17 @@ StatementPage.jsx should end up a thin shell: state + which step renders + foote
 
 
 
+
+
+| Field | Type | Constraints | Meaning |
+|---|---|---|---|
+| `id` | BIGINT | Primary Key, Not Null, Auto-generated | Unique ID of the Relationship Manager |
+| `username` | VARCHAR | Not Null, Unique | Login username of the RM |
+| `password_hash` | VARCHAR | Not Null | BCrypt-hashed login password; the actual password is never stored |
+| `name` | VARCHAR | Not Null | Full name of the Relationship Manager |
+| `initials` | VARCHAR | Not Null | Short initials used for display, e.g. `RK` |
+| `email` | VARCHAR | Not Null | RM's email address used for MFA OTP |
+| `branch` | VARCHAR | Not Null | Branch associated with the RM |
+| `mfa_enabled` | BOOLEAN | Not Null, Default `true` | Determines whether email OTP MFA is required |
+| `created_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was created |
+| `updated_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was last updated |
