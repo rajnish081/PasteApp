@@ -184,1028 +184,689 @@ import { SUPPORTED_LANGUAGES, useLanguage } from '../../context/LanguageContext'
 }
 
 
-
-
-
-#HIII
-
-
-import { useMemo, useState } from 'react';
-import { useLanguage } from '../../../context/LanguageContext';
-import PaginationBar from '../../../components/ui/PaginationBar';
-import usePagination from '../../../components/ui/usePagination';
-import { formatAmount } from '../../../utils/formatCurrency';
-
-// Step 1 — pick the customer, then show what they hold so the RM can confirm
-// they have the right person before committing to a scope.
-export default function StepCustomer({ customers, customerId, customer, onSelect }) {
-  const { t } = useLanguage();
-  const [query, setQuery] = useState('');
-
-  const visible = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return customers.filter(
-      (c) => !term || c.name.toLowerCase().includes(term) || c.id.toLowerCase().includes(term)
-    );
-  }, [customers, query]);
-
-  const pagination = usePagination(visible.length, 4);
-  const rows = pagination.slice(visible);
-
-  const productCount = customer ? customer.accounts.reduce((n, a) => n + a.products.length, 0) : 0;
-
-  return (
-    <>
-      <h3 className="wizard__title">{t('statements.selectCustomer')}</h3>
-
-      <input
-        type="search"
-        className="wizard__search"
-        placeholder={t('statements.searchPlaceholder')}
-        aria-label={t('statements.searchPlaceholder')}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-
-      <div className="ui-table__wrapper ui-table__wrapper--flush">
-        <table className="ui-table">
-          <thead>
-            <tr>
-              <th>{t('statements.select')}</th>
-              <th>{t('customers.customerId')}</th>
-              <th>{t('customers.customerName')}</th>
-              <th>{t('statements.type')}</th>
-              <th style={{ textAlign: 'right' }}>{t('customers.portfolioValue')}</th>
-              <th>{t('customers.riskProfile')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="ui-table__row--clickable" onClick={() => onSelect(row.id)}>
-                <td>
-                  <input
-                    type="radio"
-                    name="customerId"
-                    value={row.id}
-                    checked={customerId === row.id}
-                    onChange={() => onSelect(row.id)}
-                    aria-label={row.name}
-                  />
-                </td>
-                <td>{row.id}</td>
-                <td>{row.name}</td>
-                <td>{row.tier}</td>
-                <td style={{ textAlign: 'right' }}>{formatAmount(row.portfolioValue)}</td>
-                <td>{row.risk}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!visible.length && <p className="ui-table__empty">{t('common.noResults')}</p>}
-      </div>
-
-      <PaginationBar pagination={pagination} noun={t('statements.customersLower')} />
-
-      {customer && (
-        <section className="customer-preview">
-          <header>
-            <strong>
-              {customer.name} ({customer.id})
-            </strong>
-            <span>
-              {customer.accounts.length} {t('statements.accountsLower')} · {productCount}{' '}
-              {t('statements.productsLower')} · {formatAmount(customer.portfolioValue)}
-            </span>
-          </header>
-
-          {customer.accounts.length ? (
-            <ul>
-              {customer.accounts.map((account) => (
-                <li key={account.accountNumber}>
-                  <code>{account.accountNumber}</code>
-                  <span>{t(account.nameKey)}</span>
-                  <span className="customer-preview__value">{formatAmount(account.balance)}</span>
-                  <small>
-                    {account.products.length} {t('statements.productsLower')}
-                  </small>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="ui-table__empty">{t('statements.emptyAccounts')}</p>
-          )}
-        </section>
-      )}
-    </>
-  );
-}
-
-
-
-
-import { useLanguage } from '../../../context/LanguageContext';
-import Loader from '../../../components/common/Loader';
-import StatementPreview from '../StatementPreview';
-
-// Step 5 — the generated document.
-export default function StepGenerate({ state, customer, summary, transactions, range }) {
-  const { t } = useLanguage();
-
-  if (state.generating) return <Loader label={t('statements.generating')} />;
-
-  return (
-    <>
-      {state.message && <p className="wizard__success">{state.message}</p>}
-      <StatementPreview
-        customer={customer}
-        products={summary.products}
-        transactions={transactions}
-        statement={state.result}
-        statementType={state.statementType}
-        detailLevel={state.detailLevel}
-        range={range}
-        language={state.language}
-      />
-    </>
-  );
-}
-
-
-
-import { useLanguage } from '../../../context/LanguageContext';
-import Input from '../../../components/common/Input';
-import { statementLanguages, statementPeriods } from '../../../services/mockData';
-import { periodModeFor, validatePeriod } from '../statementRules';
-
-// Step 3 — period and language. Statement type has moved to step 2, and what
-// is left is type-aware: a Portfolio Statement is a point-in-time snapshot, so
-// it asks for a single date rather than a range.
-export default function StepPeriod({ statementType, period, language, dispatch }) {
-  const { t } = useLanguage();
-
-  const mode = periodModeFor(statementType);
-  const { errors } = validatePeriod(period, statementType);
-
-  return (
-    <div className="wizard__columns">
-        <fieldset className="panel">
-          <legend>{t('statements.period')}</legend>
-
-          {mode === 'asOf' ? (
-            <>
-              <p className="panel__note">{t('statements.asOfHint')}</p>
-              <Input
-                id="asOf"
-                type="date"
-                label={t('statements.asOfDate')}
-                value={period.asOf}
-                error={errors.asOf ? t(errors.asOf) : ''}
-                onChange={(e) => dispatch({ type: 'SET_PERIOD', patch: { asOf: e.target.value } })}
-              />
-            </>
-          ) : (
-            <>
-              {statementPeriods.map((preset) => (
-                <label key={preset.id} className="option option--inline">
-                  <input
-                    type="radio"
-                    name="period"
-                    value={preset.id}
-                    checked={period.preset === preset.id}
-                    onChange={() =>
-                      dispatch({ type: 'SET_PERIOD', patch: { preset: preset.id } })
-                    }
-                  />
-                  <span className="option__body">{t(preset.labelKey)}</span>
-                </label>
-              ))}
-
-              {period.preset === 'custom' && (
-                <div className="wizard__grid wizard__grid--dates">
-                  <Input
-                    id="from"
-                    type="date"
-                    label={t('statements.from')}
-                    value={period.from}
-                    error={errors.from ? t(errors.from) : ''}
-                    onChange={(e) =>
-                      dispatch({ type: 'SET_PERIOD', patch: { from: e.target.value } })
-                    }
-                  />
-                  <Input
-                    id="to"
-                    type="date"
-                    label={t('statements.to')}
-                    value={period.to}
-                    error={errors.to ? t(errors.to) : ''}
-                    onChange={(e) => dispatch({ type: 'SET_PERIOD', patch: { to: e.target.value } })}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </fieldset>
-
-        <fieldset className="panel">
-          <legend>{t('statements.outputLanguage')}</legend>
-
-          <div className="lang-cards">
-            {statementLanguages.map((option) => (
-              <label
-                key={option.code}
-                className={`lang-card ${language === option.code ? 'lang-card--on' : ''}`.trim()}
-              >
-                <input
-                  type="radio"
-                  name="language"
-                  value={option.code}
-                  checked={language === option.code}
-                  onChange={() => dispatch({ type: 'SET_LANGUAGE', language: option.code })}
-                />
-                <span>{t(option.labelKey)}</span>
-              </label>
-            ))}
-          </div>
-      </fieldset>
-    </div>
-  );
-}
-
-
-
-
-import { useLanguage } from '../../../context/LanguageContext';
-import PaginationBar from '../../../components/ui/PaginationBar';
-import usePagination from '../../../components/ui/usePagination';
-import { statementLanguages, statementPeriods, statementTypes } from '../../../services/mockData';
-import { formatAmount, formatCurrency } from '../../../utils/formatCurrency';
-import { formatDate } from '../../../utils/formatDate';
+#hii
 import {
+  DETAIL_LEVELS,
   SCOPE_MODES,
+  defaultStatementTypeFor,
+  isTypeAllowed,
+  periodModeFor,
+  toIsoDate,
+} from './statementRules';
+
+// All wizard state in one reducer. The point is the cascade: every mutating
+// action clears what depends on it, so it is impossible to reach Review
+// carrying a statement type that the current selection no longer allows.
+
+export const STEPS = {
+  CUSTOMER: 0,
+  SCOPE: 1,
+  PERIOD: 2,
+  REVIEW: 3,
+  GENERATE: 4,
+};
+
+export const initialState = {
+  step: STEPS.CUSTOMER,
+  furthestStep: STEPS.CUSTOMER,
+  customerId: '',
+  scope: { mode: SCOPE_MODES.SELECTION, productIds: [] },
+  statementType: null,
+  detailLevel: DETAIL_LEVELS.PRODUCT_DETAILS,
+  period: { preset: 'lastMonth', from: '', to: '', asOf: toIsoDate(new Date()) },
+  language: 'en',
+  result: null,
+  message: '',
+  error: '',
+  generating: false,
+};
+
+function clampFurthest(state, step) {
+  return { ...state, furthestStep: Math.min(state.furthestStep, step) };
+}
+
+// Re-checks the chosen type against the new selection. If it is no longer
+// allowed it is cleared rather than silently kept — the RM must pick again.
+function reconcileType(state, customer) {
+  if (!state.statementType) return state;
+  if (isTypeAllowed(state.statementType, state.scope, customer)) return state;
+  return { ...state, statementType: null };
+}
+
+// Switching between a range and an as-of snapshot invalidates the other one.
+function reconcilePeriod(state, previousType) {
+  if (periodModeFor(state.statementType) === periodModeFor(previousType)) return state;
+  return { ...state, period: { ...initialState.period, asOf: toIsoDate(new Date()) } };
+}
+
+export function statementReducer(state, action) {
+  switch (action.type) {
+    case 'SELECT_CUSTOMER': {
+      if (action.customerId === state.customerId) return state;
+      // A different customer invalidates everything downstream.
+      return {
+        ...initialState,
+        period: { ...initialState.period },
+        scope: { ...initialState.scope, productIds: [] },
+        customerId: action.customerId,
+        language: state.language,
+        step: state.step,
+        furthestStep: STEPS.CUSTOMER,
+      };
+    }
+
+    case 'SET_SCOPE_MODE': {
+      const scope =
+        action.mode === SCOPE_MODES.PORTFOLIO
+          ? { mode: SCOPE_MODES.PORTFOLIO, productIds: [] }
+          : { mode: SCOPE_MODES.SELECTION, productIds: [] };
+      const next = clampFurthest({ ...state, scope, statementType: null }, STEPS.SCOPE);
+      return { ...next, statementType: defaultStatementTypeFor(scope, action.customer) };
+    }
+
+    case 'TOGGLE_PRODUCT': {
+      const ids = state.scope.productIds;
+      const productIds = ids.includes(action.productId)
+        ? ids.filter((id) => id !== action.productId)
+        : [...ids, action.productId];
+      const scope = { ...state.scope, productIds };
+      return reconcileType(clampFurthest({ ...state, scope }, STEPS.SCOPE), action.customer);
+    }
+
+    case 'TOGGLE_ACCOUNT': {
+      const own = action.account.products.map((p) => p.id);
+      const allPicked = own.every((id) => state.scope.productIds.includes(id));
+      const productIds = allPicked
+        ? state.scope.productIds.filter((id) => !own.includes(id))
+        : [...new Set([...state.scope.productIds, ...own])];
+      const scope = { ...state.scope, productIds };
+      return reconcileType(clampFurthest({ ...state, scope }, STEPS.SCOPE), action.customer);
+    }
+
+    case 'SET_TYPE': {
+      const next = clampFurthest({ ...state, statementType: action.statementType }, STEPS.SCOPE);
+      return reconcilePeriod(next, state.statementType);
+    }
+
+    case 'SET_DETAIL_LEVEL':
+      return clampFurthest({ ...state, detailLevel: action.detailLevel }, STEPS.SCOPE);
+
+    case 'SET_PERIOD':
+      return clampFurthest(
+        { ...state, period: { ...state.period, ...action.patch } },
+        STEPS.PERIOD
+      );
+
+    case 'SET_LANGUAGE':
+      return clampFurthest({ ...state, language: action.language }, STEPS.PERIOD);
+
+    case 'GO_TO_STEP':
+      return {
+        ...state,
+        step: action.step,
+        furthestStep: Math.max(state.furthestStep, action.step),
+        error: '',
+      };
+
+    case 'GENERATE_START':
+      return { ...state, generating: true, error: '' };
+
+    case 'GENERATE_SUCCESS':
+      return {
+        ...state,
+        generating: false,
+        result: action.result,
+        message: action.message,
+        step: STEPS.GENERATE,
+        furthestStep: STEPS.GENERATE,
+      };
+
+    case 'GENERATE_FAILURE':
+      return { ...state, generating: false, error: action.error };
+
+    case 'SET_MESSAGE':
+      return { ...state, message: action.message };
+
+    case 'RESET':
+      // "Generate another" resets everything except the RM's language choice.
+      return { ...initialState, period: { ...initialState.period }, language: state.language };
+
+    default:
+      return state;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+// Every branching rule for the statement wizard lives here and nowhere else.
+// Pure functions only — no React, no i18n, no formatting. Components read these
+// and never re-derive a rule for themselves.
+
+export const SCOPE_MODES = {
+  PORTFOLIO: 'portfolio',
+  SELECTION: 'selection',
+};
+
+export const TYPES = {
+  ACCOUNT: 'accountStatement',
+  TRANSACTION: 'transactionStatement',
+  PORTFOLIO: 'portfolioStatement',
+  CONSOLIDATED: 'consolidatedWealthStatement',
+};
+
+export const DETAIL_LEVELS = {
+  PRODUCT_DETAILS: 'productDetails',
+  HOLDINGS_SUMMARY: 'holdingsSummary',
+};
+
+export const MAX_RANGE_MONTHS = 24;
+
+// --- selection ----------------------------------------------------------
+// The selection is stored as productIds ONLY. "Account is selected" means
+// every product in it is selected — deriving that instead of storing a second
+// array is what stops the two from drifting out of sync.
+
+export function accountState(account, productIds) {
+  const total = account.products.length;
+  const picked = account.products.filter((p) => productIds.includes(p.id)).length;
+  if (picked === 0) return 'none';
+  return picked === total ? 'all' : 'some';
+}
+
+export function selectionSummary(scope, customer) {
+  const accounts = customer?.accounts || [];
+
+  if (!customer) {
+    return {
+      isEmpty: true, isPortfolio: false, accounts: [], products: [],
+      fullAccounts: [], partialAccounts: [], accountCount: 0, productCount: 0, total: 0,
+    };
+  }
+
+  if (scope.mode === SCOPE_MODES.PORTFOLIO) {
+    const products = accounts.flatMap((a) => a.products);
+    return {
+      isEmpty: products.length === 0,
+      isPortfolio: true,
+      accounts,
+      products,
+      fullAccounts: accounts,
+      partialAccounts: [],
+      accountCount: accounts.length,
+      productCount: products.length,
+      total: products.reduce((sum, p) => sum + p.value, 0),
+    };
+  }
+
+  const ids = scope.productIds || [];
+  const touched = accounts.filter((a) => accountState(a, ids) !== 'none');
+  const products = touched.flatMap((a) => a.products.filter((p) => ids.includes(p.id)));
+
+  return {
+    isEmpty: products.length === 0,
+    isPortfolio: false,
+    accounts: touched,
+    products,
+    fullAccounts: touched.filter((a) => accountState(a, ids) === 'all'),
+    partialAccounts: touched.filter((a) => accountState(a, ids) === 'some'),
+    accountCount: touched.length,
+    productCount: products.length,
+    total: products.reduce((sum, p) => sum + p.value, 0),
+  };
+}
+
+// --- type derivation ----------------------------------------------------
+// The rule, in one sentence: how many ACCOUNTS the selection touches decides
+// which statement types make sense.
+//
+//   portfolio mode      -> Portfolio
+//   1 account touched   -> Account, Transaction
+//   2+ accounts touched -> Consolidated Wealth, Transaction
+//
+// A "partial" account (some products picked) is still one account touched, so
+// the products-only case falls out of the same rule rather than needing its own.
+
+export function allowedStatementTypes(scope, customer) {
+  const summary = selectionSummary(scope, customer);
+  const row = (type, enabled, reasonKey) => ({ type, enabled, reasonKey: enabled ? null : reasonKey });
+
+  if (summary.isPortfolio) {
+    return [
+      row(TYPES.ACCOUNT, false, 'statements.reasonNotForPortfolio'),
+      row(TYPES.TRANSACTION, false, 'statements.reasonNotForPortfolio'),
+      row(TYPES.PORTFOLIO, true),
+      row(TYPES.CONSOLIDATED, false, 'statements.reasonNotForPortfolio'),
+    ];
+  }
+
+  if (summary.isEmpty) {
+    return [
+      row(TYPES.ACCOUNT, false, 'statements.reasonSelectSomething'),
+      row(TYPES.TRANSACTION, false, 'statements.reasonSelectSomething'),
+      row(TYPES.PORTFOLIO, false, 'statements.reasonPortfolioOnly'),
+      row(TYPES.CONSOLIDATED, false, 'statements.reasonSelectSomething'),
+    ];
+  }
+
+  const multiAccount = summary.accountCount >= 2;
+
+  return [
+    row(TYPES.ACCOUNT, !multiAccount, 'statements.reasonSingleAccountOnly'),
+    row(TYPES.TRANSACTION, true),
+    row(TYPES.PORTFOLIO, false, 'statements.reasonPortfolioOnly'),
+    row(TYPES.CONSOLIDATED, multiAccount, 'statements.reasonNeedsTwoAccounts'),
+  ];
+}
+
+export function isTypeAllowed(type, scope, customer) {
+  return allowedStatementTypes(scope, customer).some((r) => r.type === type && r.enabled);
+}
+
+export function defaultStatementTypeFor(scope, customer) {
+  const summary = selectionSummary(scope, customer);
+  if (summary.isPortfolio) return TYPES.PORTFOLIO;
+  if (summary.isEmpty) return null;
+  return summary.accountCount >= 2 ? TYPES.CONSOLIDATED : TYPES.ACCOUNT;
+}
+
+// The detail-level choice only means something for an Account Statement run
+// over part of an account — anywhere else there is nothing to vary.
+export function showsDetailLevel(scope, customer, statementType) {
+  if (statementType !== TYPES.ACCOUNT) return false;
+  const summary = selectionSummary(scope, customer);
+  return summary.accountCount === 1 && summary.partialAccounts.length === 1;
+}
+
+// --- period -------------------------------------------------------------
+
+export function periodModeFor(statementType) {
+  return statementType === TYPES.PORTFOLIO ? 'asOf' : 'range';
+}
+
+function toDate(value) {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function monthsBetween(from, to) {
+  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+}
+
+export function validatePeriod(period, statementType, today = new Date()) {
+  const errors = {};
+  const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  if (periodModeFor(statementType) === 'asOf') {
+    const asOf = toDate(period.asOf);
+    if (!asOf) errors.asOf = 'statements.errorDateRequired';
+    else if (asOf > endOfToday) errors.asOf = 'statements.errorFuture';
+    return { valid: Object.keys(errors).length === 0, errors };
+  }
+
+  if (period.preset !== 'custom') return { valid: true, errors };
+
+  const from = toDate(period.from);
+  const to = toDate(period.to);
+
+  if (!from) errors.from = 'statements.errorDateRequired';
+  if (!to) errors.to = 'statements.errorDateRequired';
+
+  if (from && to) {
+    if (from > to) errors.from = 'statements.errorFromAfterTo';
+    else if (monthsBetween(from, to) > MAX_RANGE_MONTHS) errors.to = 'statements.errorRangeTooLong';
+  }
+  if (to && to > endOfToday) errors.to = 'statements.errorFuture';
+
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+// Turns a preset into the concrete dates it stands for, so Review can show the
+// range the RM is actually about to generate rather than just "Current Year".
+export function resolvePeriodRange(period, statementType, today = new Date()) {
+  if (periodModeFor(statementType) === 'asOf') {
+    return { asOf: period.asOf || toIsoDate(today) };
+  }
+  if (period.preset === 'custom') return { from: period.from, to: period.to };
+
+  const to = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let from;
+
+  if (period.preset === 'currentYear') {
+    from = new Date(today.getFullYear(), 0, 1);
+  } else {
+    const months = { lastMonth: 1, threeMonths: 3, sixMonths: 6 }[period.preset] ?? 1;
+    from = monthsBefore(to, months);
+  }
+
+  return { from: toIsoDate(from), to: toIsoDate(to) };
+}
+
+// Steps back whole months, clamping to the last valid day of the target month.
+// Without the clamp, 6 months before 29 Aug is 29 Feb — which in a non-leap
+// year silently rolls forward to 1 Mar and quietly shortens the period.
+function monthsBefore(date, months) {
+  const target = new Date(date.getFullYear(), date.getMonth() - months, 1);
+  const lastDayOfMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(date.getDate(), lastDayOfMonth));
+  return target;
+}
+
+export function toIsoDate(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// --- transactions -------------------------------------------------------
+// Which activity belongs in this statement. Account-level selections take the
+// whole ledger for that account; product-level selections take only the rows
+// that reference a selected product.
+
+export function transactionsFor(scope, customer, range) {
+  if (!customer) return [];
+  const summary = selectionSummary(scope, customer);
+  const accountNumbers = summary.accounts.map((a) => a.accountNumber);
+  const productIds = summary.products.map((p) => p.id);
+  const wholeAccounts = summary.fullAccounts.map((a) => a.accountNumber);
+
+  return (customer.transactions || [])
+    .filter((tx) => {
+      if (!accountNumbers.includes(tx.accountNumber)) return false;
+      if (wholeAccounts.includes(tx.accountNumber)) return true;
+      return tx.productId && productIds.includes(tx.productId);
+    })
+    .filter((tx) => {
+      if (!range?.from || !range?.to) return true;
+      return tx.date >= range.from && tx.date <= range.to;
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+
+
+
+
+
+
+
+import {
+  DETAIL_LEVELS,
+  MAX_RANGE_MONTHS,
+  SCOPE_MODES,
+  TYPES,
+  accountState,
+  allowedStatementTypes,
+  defaultStatementTypeFor,
   periodModeFor,
   resolvePeriodRange,
   selectionSummary,
   showsDetailLevel,
-} from '../statementRules';
-import { STEPS } from '../statementReducer';
-
-// Step 4 — read-only, and it must reflect the branch actually taken, including
-// the detail level. Every row carries an Edit link back to its owning step.
-export default function StepReview({ state, customer, dispatch }) {
-  const { t, language: uiLanguage } = useLanguage();
-
-  const summary = selectionSummary(state.scope, customer);
-  const range = resolvePeriodRange(state.period, state.statementType);
-  const pagination = usePagination(summary.products.length, 25);
-  const rows = pagination.slice(summary.products);
-
-  const typeLabel = t(statementTypes.find((s) => s.id === state.statementType)?.labelKey || '');
-  const detailLabel = showsDetailLevel(state.scope, customer, state.statementType)
-    ? ` — ${t(`statements.detail_${state.detailLevel}`)}`
-    : '';
-
-  const preset = statementPeriods.find((p) => p.id === state.period.preset);
-  const periodLabel =
-    periodModeFor(state.statementType) === 'asOf'
-      ? `${t('statements.asOfDate')}: ${formatDate(range.asOf, uiLanguage)}`
-      : `${t(preset?.labelKey || '')} (${formatDate(range.from, uiLanguage)} – ${formatDate(range.to, uiLanguage)})`;
-
-  const scopeLabel =
-    state.scope.mode === SCOPE_MODES.PORTFOLIO
-      ? t('statements.entirePortfolio')
-      : t('statements.scopeSummary')
-          .replace('{products}', summary.productCount)
-          .replace('{accounts}', summary.accountCount);
-
-  const rowsFor = [
-    { key: 'customer', label: t('customers.customerName'), value: `${customer?.name} (${customer?.id})`, step: STEPS.CUSTOMER },
-    { key: 'scope', label: t('statements.scopeTitle'), value: scopeLabel, step: STEPS.SCOPE },
-    { key: 'type', label: t('statements.statementType'), value: `${typeLabel}${detailLabel}`, step: STEPS.SCOPE },
-    { key: 'period', label: t('statements.period'), value: periodLabel, step: STEPS.PERIOD },
-    {
-      key: 'language',
-      label: t('statements.outputLanguage'),
-      value: t(statementLanguages.find((l) => l.code === state.language)?.labelKey || ''),
-      step: STEPS.PERIOD,
-    },
-  ];
-
-  return (
-    <>
-      <h3 className="wizard__title">{t('statements.reviewTitle')}</h3>
-
-      <dl className="review-list">
-        {rowsFor.map((row) => (
-          <div key={row.key}>
-            <dt>{row.label}</dt>
-            <dd>
-              {row.value}
-              <button
-                type="button"
-                className="review-list__edit"
-                onClick={() => dispatch({ type: 'GO_TO_STEP', step: row.step })}
-              >
-                {t('common.edit')}
-              </button>
-            </dd>
-          </div>
-        ))}
-      </dl>
-
-      <h4 className="wizard__subtitle">{t('statements.includedItems')}</h4>
-
-      <div className="ui-table__wrapper ui-table__wrapper--flush">
-        <table className="ui-table">
-          <thead>
-            <tr>
-              <th>{t('statements.accountProduct')}</th>
-              <th>{t('statements.accountNumber')}</th>
-              <th style={{ textAlign: 'right' }}>{t('statements.amount')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((product) => (
-              <tr key={product.id}>
-                <td>{product.name}</td>
-                <td className="grouped-table__num">{product.accountNumber}</td>
-                <td style={{ textAlign: 'right' }}>{formatAmount(product.value)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colSpan={2}>{t('statements.total')}</td>
-              <td style={{ textAlign: 'right' }}>{formatCurrency(summary.total)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      <PaginationBar pagination={pagination} noun={t('statements.itemsLower')} />
-    </>
-  );
-}
-
-
-
-
-import { useLanguage } from '../../../context/LanguageContext';
-import GroupedSelectTable from '../../../components/ui/GroupedSelectTable';
-import { statementTypes } from '../../../services/mockData';
-import {
-  DETAIL_LEVELS,
-  SCOPE_MODES,
-  accountState,
-  allowedStatementTypes,
-  selectionSummary,
-  showsDetailLevel,
-} from '../statementRules';
-
-// Step 2 — scope AND statement type, decided together.
-//
-// This is the pivot of the redesign: the type used to live in step 3, with no
-// relationship to the selection. Here the selection drives which types are
-// offered, so an impossible combination is unreachable rather than merely wrong.
-export default function StepScope({ customer, scope, statementType, detailLevel, dispatch }) {
-  const { t } = useLanguage();
-
-  const summary = selectionSummary(scope, customer);
-  const options = allowedStatementTypes(scope, customer);
-  const isPortfolio = scope.mode === SCOPE_MODES.PORTFOLIO;
-  const showDetail = showsDetailLevel(scope, customer, statementType);
-
-  const labelFor = (typeId) => t(statementTypes.find((s) => s.id === typeId).labelKey);
-
-  return (
-    <>
-      <h3 className="wizard__title">{t('statements.scopeTitle')}</h3>
-      <p className="wizard__hint">{t('statements.scopeHint')}</p>
-
-      {/* Panel A — what to include */}
-      <fieldset className="panel">
-        <legend>{t('statements.include')}</legend>
-
-        <label className="option option--inline">
-          <input
-            type="radio"
-            name="scopeMode"
-            checked={isPortfolio}
-            onChange={() =>
-              dispatch({ type: 'SET_SCOPE_MODE', mode: SCOPE_MODES.PORTFOLIO, customer })
-            }
-          />
-          <span className="option__body">
-            {t('statements.entirePortfolio')}
-            <small>{t('statements.entirePortfolioHint')}</small>
-          </span>
-        </label>
-
-        <label className="option option--inline">
-          <input
-            type="radio"
-            name="scopeMode"
-            checked={!isPortfolio}
-            onChange={() =>
-              dispatch({ type: 'SET_SCOPE_MODE', mode: SCOPE_MODES.SELECTION, customer })
-            }
-          />
-          <span className="option__body">
-            {t('statements.selectedAccounts')}
-            <small>{t('statements.selectedAccountsHint')}</small>
-          </span>
-        </label>
-      </fieldset>
-
-      {!isPortfolio && (
-        <GroupedSelectTable
-          accounts={customer?.accounts || []}
-          productIds={scope.productIds}
-          accountStateOf={(account) => accountState(account, scope.productIds)}
-          onToggleAccount={(account) => dispatch({ type: 'TOGGLE_ACCOUNT', account, customer })}
-          onToggleProduct={(product) =>
-            dispatch({ type: 'TOGGLE_PRODUCT', productId: product.id, customer })
-          }
-          emptyMessage={t('statements.emptyAccounts')}
-        />
-      )}
-
-      {/* Panel B — the types this selection permits */}
-      {(isPortfolio || !summary.isEmpty) && (
-        <fieldset className="panel">
-          <legend>{t('statements.statementType')}</legend>
-          <p className="panel__note">
-            {t('statements.scopeSummary')
-              .replace('{products}', summary.productCount)
-              .replace('{accounts}', summary.accountCount)}
-          </p>
-
-          {options.map(({ type, enabled, reasonKey }) => (
-            <label key={type} className={`option ${enabled ? '' : 'option--disabled'}`.trim()}>
-              <input
-                type="radio"
-                name="statementType"
-                value={type}
-                checked={statementType === type}
-                disabled={!enabled}
-                onChange={() => dispatch({ type: 'SET_TYPE', statementType: type })}
-              />
-              <span className="option__body">
-                {labelFor(type)}
-                <small>{enabled ? t(`statements.hint_${type}`) : t(reasonKey)}</small>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-      )}
-
-      {/* Panel C — only meaningful for part of a single account */}
-      {showDetail && (
-        <fieldset className="panel">
-          <legend>{t('statements.detailLevel')}</legend>
-
-          {[DETAIL_LEVELS.PRODUCT_DETAILS, DETAIL_LEVELS.HOLDINGS_SUMMARY].map((level) => (
-            <label key={level} className="option">
-              <input
-                type="radio"
-                name="detailLevel"
-                value={level}
-                checked={detailLevel === level}
-                onChange={() => dispatch({ type: 'SET_DETAIL_LEVEL', detailLevel: level })}
-              />
-              <span className="option__body">
-                {t(`statements.detail_${level}`)}
-                <small>{t(`statements.detailHint_${level}`)}</small>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-      )}
-    </>
-  );
-}
-
-
-
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { useLanguage } from '../../context/LanguageContext';
-import api from '../../services/api';
-import Button from '../../components/common/Button';
-import Loader from '../../components/common/Loader';
-import Modal from '../../components/common/Modal';
-import PageHero from '../../components/ui/PageHero';
-import Stepper from '../../components/ui/Stepper';
-import StepCustomer from './steps/StepCustomer';
-import StepScope from './steps/StepScope';
-import StepPeriod from './steps/StepPeriod';
-import StepReview from './steps/StepReview';
-import StepGenerate from './steps/StepGenerate';
-import { STEPS, initialState, statementReducer } from './statementReducer';
-import {
-  resolvePeriodRange,
-  selectionSummary,
   transactionsFor,
   validatePeriod,
 } from './statementRules';
-import './statement.css';
 
-// Owner: Sumit — US02 + US04.
-// Five steps: Customer → Scope & Type → Period & Language → Review → Generate.
-//
-// This file is deliberately thin: state lives in statementReducer, every
-// branching rule lives in statementRules, and each step renders itself. Adding
-// or reordering a step is a change to STEP_CONFIG alone.
-const STEP_CONFIG = [
-  { id: 'customer', labelKey: 'statements.stepCustomer', subtitleKey: 'statements.subtitle' },
-  { id: 'scope', labelKey: 'statements.stepProduct', subtitleKey: 'statements.scopeHint' },
-  { id: 'period', labelKey: 'statements.stepTypePeriod', subtitleKey: 'statements.periodHint' },
-  { id: 'review', labelKey: 'statements.stepReview', subtitleKey: 'statements.reviewHint' },
-  { id: 'generate', labelKey: 'statements.stepGenerate', subtitleKey: 'statements.readySubtitle' },
-];
-
-export default function StatementPage() {
-  const { t } = useLanguage();
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  const [customers, setCustomers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [confirmCancel, setConfirmCancel] = useState(false);
-  const [state, dispatch] = useReducer(statementReducer, initialState);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getCustomers()
-      .then((data) => {
-        if (cancelled) return;
-        setCustomers(data);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const customer = useMemo(
-    () => customers.find((c) => c.id === state.customerId) || null,
-    [customers, state.customerId]
-  );
-
-  // Deep link — arriving from a customer row pre-fills step 1 and opens step 2
-  // rather than making the RM find the customer they just had open. Applied
-  // once only, so "Generate another" starts genuinely blank.
-  const deepLinkId = location.state?.customerId;
-  const deepLinkApplied = useRef(false);
-  useEffect(() => {
-    if (!deepLinkId || !customers.length || deepLinkApplied.current) return;
-    deepLinkApplied.current = true;
-    dispatch({ type: 'SELECT_CUSTOMER', customerId: deepLinkId });
-    dispatch({ type: 'GO_TO_STEP', step: STEPS.SCOPE });
-  }, [deepLinkId, customers.length]);
-
-  const summary = useMemo(
-    () => selectionSummary(state.scope, customer),
-    [state.scope, customer]
-  );
-
-  const range = useMemo(
-    () => resolvePeriodRange(state.period, state.statementType),
-    [state.period, state.statementType]
-  );
-
-  const transactions = useMemo(
-    () => transactionsFor(state.scope, customer, range),
-    [state.scope, customer, range]
-  );
-
-  // One gate per step, read straight off the rules module.
-  const canAdvance = useMemo(() => {
-    switch (state.step) {
-      case STEPS.CUSTOMER:
-        return Boolean(state.customerId);
-      case STEPS.SCOPE:
-        return !summary.isEmpty && Boolean(state.statementType);
-      case STEPS.PERIOD:
-        return validatePeriod(state.period, state.statementType).valid;
-      case STEPS.REVIEW:
-        return !state.generating;
-      default:
-        return false;
-    }
-  }, [state, summary]);
-
-  const generate = useCallback(async () => {
-    dispatch({ type: 'GENERATE_START' });
-    try {
-      const result = await api.generateStatement({
-        customerId: state.customerId,
-        scopeMode: state.scope.mode,
-        productIds: summary.products.map((p) => p.id),
-        accountNumbers: summary.accounts.map((a) => a.accountNumber),
-        statementType: state.statementType,
-        detailLevel: state.detailLevel,
-        period: state.period,
-        range,
-        language: state.language,
-      });
-      dispatch({ type: 'GENERATE_SUCCESS', result, message: t('statements.generated') });
-    } catch (err) {
-      dispatch({ type: 'GENERATE_FAILURE', error: t('statements.generateFailed') });
-    }
-  }, [state, summary, range, t]);
-
-  const onEmail = async () => {
-    try {
-      await api.emailDocument({ type: 'statement', customerId: state.customerId });
-      dispatch({ type: 'SET_MESSAGE', message: t('statements.emailed') });
-    } catch (err) {
-      dispatch({ type: 'GENERATE_FAILURE', error: t('statements.emailFailed') });
-    }
-  };
-
-  const hasWork = Boolean(state.customerId) || state.scope.productIds.length > 0;
-
-  const onCancel = () => {
-    if (hasWork) setConfirmCancel(true);
-    else navigate('/');
-  };
-
-  if (loading) return <Loader label={t('common.loading')} />;
-
-  const goTo = (step) => dispatch({ type: 'GO_TO_STEP', step });
-
-  return (
-    <div className="statement-page">
-      <PageHero title={t('statements.title')} subtitle={t(STEP_CONFIG[state.step].subtitleKey)} />
-
-      <Stepper
-        steps={STEP_CONFIG.map((s) => t(s.labelKey))}
-        current={state.step}
-        onStepClick={goTo}
-      />
-
-      <section className="wizard">
-        {state.error && (
-          <p className="wizard__error" role="alert">
-            {state.error}
-          </p>
-        )}
-
-        {state.step === STEPS.CUSTOMER && (
-          <StepCustomer
-            customers={customers}
-            customerId={state.customerId}
-            customer={customer}
-            onSelect={(customerId) => dispatch({ type: 'SELECT_CUSTOMER', customerId })}
-          />
-        )}
-
-        {state.step === STEPS.SCOPE && (
-          <StepScope
-            customer={customer}
-            scope={state.scope}
-            statementType={state.statementType}
-            detailLevel={state.detailLevel}
-            dispatch={dispatch}
-          />
-        )}
-
-        {state.step === STEPS.PERIOD && (
-          <StepPeriod
-            statementType={state.statementType}
-            period={state.period}
-            language={state.language}
-            dispatch={dispatch}
-          />
-        )}
-
-        {state.step === STEPS.REVIEW && (
-          <StepReview state={state} customer={customer} dispatch={dispatch} />
-        )}
-
-        {state.step === STEPS.GENERATE && (
-          <StepGenerate
-            state={state}
-            customer={customer}
-            summary={summary}
-            transactions={transactions}
-            range={range}
-          />
-        )}
-
-        <div className="wizard__footer">
-          {state.step > STEPS.CUSTOMER && state.step < STEPS.GENERATE && (
-            <Button variant="secondary" onClick={() => goTo(state.step - 1)}>
-              {t('common.back')}
-            </Button>
-          )}
-
-          <span className="wizard__footer-gap" />
-
-          {state.step < STEPS.GENERATE && (
-            <Button variant="ghost" onClick={onCancel}>
-              {t('common.cancel')}
-            </Button>
-          )}
-
-          {state.step < STEPS.REVIEW && (
-            <Button onClick={() => goTo(state.step + 1)} disabled={!canAdvance}>
-              {t('common.next')}
-            </Button>
-          )}
-
-          {state.step === STEPS.REVIEW && (
-            <Button onClick={generate} disabled={!canAdvance}>
-              {t('common.generate')}
-            </Button>
-          )}
-
-          {state.step === STEPS.GENERATE && (
-            <>
-              <Button variant="secondary" onClick={() => dispatch({ type: 'RESET' })}>
-                {t('statements.generateAnother')}
-              </Button>
-              <Button onClick={onEmail}>{t('common.sendEmail')}</Button>
-            </>
-          )}
-        </div>
-      </section>
-
-      <Modal
-        open={confirmCancel}
-        title={t('statements.cancelTitle')}
-        onClose={() => setConfirmCancel(false)}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setConfirmCancel(false)}>
-              {t('statements.cancelKeep')}
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                setConfirmCancel(false);
-                dispatch({ type: 'RESET' });
-                navigate('/');
-              }}
-            >
-              {t('statements.cancelDiscard')}
-            </Button>
-          </>
-        }
-      >
-        <p>{t('statements.cancelBody')}</p>
-      </Modal>
-    </div>
-  );
-}
-
-
-
-
-
-
-import { useLanguage } from '../../context/LanguageContext';
-import ScLogo from '../../components/ui/ScLogo';
-import { formatAmount, formatCurrency } from '../../utils/formatCurrency';
-import { formatDate } from '../../utils/formatDate';
-import { DETAIL_LEVELS, TYPES } from './statementRules';
-
-// Owner: Sumit — on-screen approximation of the Standard Chartered Global
-// Private Bank statement from the brief.
-//
-// The document's own language comes from `language` (US04), independent of the
-// dashboard language (US05). The document BODY now varies by statement type —
-// previously every type rendered the same holdings table.
-
-const COPY = {
-  en: {
-    accountStatement: 'Statement of Accounts',
-    transactionStatement: 'Transaction Statement',
-    portfolioStatement: 'Portfolio Statement',
-    consolidatedWealthStatement: 'Consolidated Wealth Statement',
-    intro:
-      'Please find enclosed the latest statement for your Standard Chartered Global Private Bank account(s). Should you wish to have a more detailed discussion on your portfolio, please do not hesitate to contact your Private Banker.',
-    product: 'Product',
-    category: 'Category',
-    value: 'Value',
-    account: 'Account',
-    date: 'Date',
-    description: 'Description',
-    amount: 'Amount',
-    total: 'Total',
-    subtotal: 'Subtotal',
-    holdings: 'Holdings',
-    activity: 'Activity',
-    noActivity: 'No activity in this period.',
-    period: 'Period',
-    asOf: 'As at',
-    sign: 'Standard Chartered Global Private Bank',
-  },
-  'zh-CN': {
-    accountStatement: '账户对账单',
-    transactionStatement: '交易对账单',
-    portfolioStatement: '投资组合对账单',
-    consolidatedWealthStatement: '综合财富对账单',
-    intro:
-      '兹附上您渣打环球私人银行账户的最新对账单。如需详细讨论您的投资组合，请联系您的私人银行家。',
-    product: '产品',
-    category: '类别',
-    value: '价值',
-    account: '账户',
-    date: '日期',
-    description: '摘要',
-    amount: '金额',
-    total: '合计',
-    subtotal: '小计',
-    holdings: '持仓',
-    activity: '交易明细',
-    noActivity: '本期无交易记录。',
-    period: '周期',
-    asOf: '截至',
-    sign: '渣打环球私人银行',
-  },
+// Two accounts: A has two products, B has one.
+const customer = {
+  id: 'CUST9001',
+  accounts: [
+    {
+      accountNumber: 'ACC-A',
+      nameKey: 'accounts.deposits',
+      balance: 300,
+      products: [
+        { id: 'PA1', name: 'FD One', type: 'FD', value: 100, accountNumber: 'ACC-A' },
+        { id: 'PA2', name: 'Bond Two', type: 'Bond', value: 200, accountNumber: 'ACC-A' },
+      ],
+    },
+    {
+      accountNumber: 'ACC-B',
+      nameKey: 'accounts.investment',
+      balance: 50,
+      products: [{ id: 'PB1', name: 'Fund Three', type: 'Mutual Fund', value: 50, accountNumber: 'ACC-B' }],
+    },
+  ],
+  transactions: [
+    { id: 'T1', date: '2026-08-10', description: 'FD One interest', amount: 5, productId: 'PA1', accountNumber: 'ACC-A' },
+    { id: 'T2', date: '2026-08-11', description: 'Bond Two buy', amount: -20, productId: 'PA2', accountNumber: 'ACC-A' },
+    { id: 'T3', date: '2026-08-12', description: 'Fund Three buy', amount: -10, productId: 'PB1', accountNumber: 'ACC-B' },
+  ],
 };
 
-function HoldingsTable({ products, copy }) {
-  const total = products.reduce((sum, p) => sum + p.value, 0);
+const selection = (...productIds) => ({ mode: SCOPE_MODES.SELECTION, productIds });
+const portfolio = { mode: SCOPE_MODES.PORTFOLIO, productIds: [] };
 
-  return (
-    <table className="statement-doc__table">
-      <thead>
-        <tr>
-          <th>{copy.product}</th>
-          <th>{copy.category}</th>
-          <th>{copy.account}</th>
-          <th style={{ textAlign: 'right' }}>{copy.value}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {products.map((product) => (
-          <tr key={product.id}>
-            <td>{product.name}</td>
-            <td>{product.type}</td>
-            <td>{product.accountNumber}</td>
-            <td style={{ textAlign: 'right' }}>{formatAmount(product.value)}</td>
-          </tr>
-        ))}
-      </tbody>
-      <tfoot>
-        <tr>
-          <td colSpan={3}>{copy.total}</td>
-          <td style={{ textAlign: 'right' }}>{formatCurrency(total)}</td>
-        </tr>
-      </tfoot>
-    </table>
-  );
-}
+const enabledTypes = (scope) =>
+  allowedStatementTypes(scope, customer)
+    .filter((r) => r.enabled)
+    .map((r) => r.type);
 
-function TransactionTable({ transactions, copy, docLanguage }) {
-  if (!transactions.length) return <p>{copy.noActivity}</p>;
+describe('accountState', () => {
+  test('reports none / some / all', () => {
+    expect(accountState(customer.accounts[0], [])).toBe('none');
+    expect(accountState(customer.accounts[0], ['PA1'])).toBe('some');
+    expect(accountState(customer.accounts[0], ['PA1', 'PA2'])).toBe('all');
+  });
+});
 
-  return (
-    <table className="statement-doc__table">
-      <thead>
-        <tr>
-          <th>{copy.date}</th>
-          <th>{copy.description}</th>
-          <th style={{ textAlign: 'right' }}>{copy.amount}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {transactions.map((tx) => (
-          <tr key={tx.id}>
-            <td>{formatDate(tx.date, docLanguage)}</td>
-            <td>{tx.description}</td>
-            <td style={{ textAlign: 'right' }}>{formatAmount(tx.amount)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
+describe('selectionSummary', () => {
+  test('counts a partial account as one account touched', () => {
+    const s = selectionSummary(selection('PA1'), customer);
+    expect(s.accountCount).toBe(1);
+    expect(s.productCount).toBe(1);
+    expect(s.partialAccounts).toHaveLength(1);
+    expect(s.fullAccounts).toHaveLength(0);
+    expect(s.total).toBe(100);
+  });
 
-export default function StatementPreview({
-  customer,
-  products = [],
-  transactions = [],
-  statement,
-  statementType = TYPES.ACCOUNT,
-  detailLevel = DETAIL_LEVELS.PRODUCT_DETAILS,
-  range = {},
-  language = 'en',
-}) {
-  const { t } = useLanguage();
-  const docLanguage = language === 'zh-CN' ? 'zh-CN' : 'en';
-  const copy = COPY[docLanguage];
-  const isChinese = docLanguage === 'zh-CN';
+  test('a fully selected account is a full account', () => {
+    const s = selectionSummary(selection('PA1', 'PA2'), customer);
+    expect(s.fullAccounts).toHaveLength(1);
+    expect(s.partialAccounts).toHaveLength(0);
+  });
 
-  if (!customer) return <p className="ui-table__empty">{t('common.noResults')}</p>;
+  test('portfolio mode takes everything', () => {
+    const s = selectionSummary(portfolio, customer);
+    expect(s.isPortfolio).toBe(true);
+    expect(s.accountCount).toBe(2);
+    expect(s.productCount).toBe(3);
+    expect(s.total).toBe(350);
+  });
 
-  // Group the included products under their account — used by the per-account
-  // layouts (consolidated, and product-details).
-  const byAccount = products.reduce((groups, product) => {
-    const key = product.accountNumber;
-    (groups[key] = groups[key] || []).push(product);
-    return groups;
-  }, {});
+  test('empty selection is empty', () => {
+    expect(selectionSummary(selection(), customer).isEmpty).toBe(true);
+  });
 
-  const periodLine = range.asOf
-    ? `${copy.asOf} ${formatDate(range.asOf, docLanguage)}`
-    : range.from && range.to
-      ? `${copy.period}: ${formatDate(range.from, docLanguage)} – ${formatDate(range.to, docLanguage)}`
-      : '';
+  test('no customer is handled', () => {
+    expect(selectionSummary(selection('PA1'), null).isEmpty).toBe(true);
+  });
+});
 
-  return (
-    <article className="statement-doc" lang={docLanguage}>
-      <header className="statement-doc__head">
-        <div className="statement-doc__brand">
-          <ScLogo size={34} />
-          <span>
-            standard chartered
-            <small>global private bank</small>
-          </span>
-        </div>
-        <address className="statement-doc__bank">
-          Standard Chartered Bank (Singapore) Limited
-          <br />
-          Marina Bay Financial Centre (Tower 1)
-          <br />
-          8 Marina Boulevard, Level 27
-        </address>
-      </header>
+// The derivation matrix — one case per row.
+describe('allowedStatementTypes', () => {
+  test('entire portfolio -> Portfolio only', () => {
+    expect(enabledTypes(portfolio)).toEqual([TYPES.PORTFOLIO]);
+  });
 
-      <p className="statement-doc__meta">
-        {formatDate(new Date(), docLanguage)}
-        {statement?.documentId && <span> · {statement.documentId}</span>}
-      </p>
+  test('one account fully selected -> Account + Transaction', () => {
+    expect(enabledTypes(selection('PA1', 'PA2'))).toEqual([TYPES.ACCOUNT, TYPES.TRANSACTION]);
+  });
 
-      <p className="statement-doc__to">
-        {isChinese && customer.nameZh ? customer.nameZh : customer.name}
-        <br />
-        {customer.id}
-        <br />
-        {customer.email}
-      </p>
+  test('products only within one account -> Account + Transaction', () => {
+    expect(enabledTypes(selection('PA1'))).toEqual([TYPES.ACCOUNT, TYPES.TRANSACTION]);
+  });
 
-      <h4>{copy[statementType] || copy.accountStatement}</h4>
-      {periodLine && <p className="statement-doc__period">{periodLine}</p>}
+  test('two accounts -> Consolidated + Transaction, and NOT Account', () => {
+    const types = enabledTypes(selection('PA1', 'PA2', 'PB1'));
+    expect(types).toEqual([TYPES.TRANSACTION, TYPES.CONSOLIDATED]);
+    expect(types).not.toContain(TYPES.ACCOUNT);
+  });
 
-      <p>{copy.intro}</p>
+  test('mixed — one full account plus a loose product elsewhere — is still two accounts', () => {
+    expect(enabledTypes(selection('PA1', 'PA2', 'PB1'))).toContain(TYPES.CONSOLIDATED);
+  });
 
-      {/* Transaction statement — the ledger, not the holdings. */}
-      {statementType === TYPES.TRANSACTION && (
-        <TransactionTable transactions={transactions} copy={copy} docLanguage={docLanguage} />
-      )}
+  test('nothing selected -> nothing enabled', () => {
+    expect(enabledTypes(selection())).toEqual([]);
+  });
 
-      {/* Consolidated wealth — one section per account, then a grand total. */}
-      {statementType === TYPES.CONSOLIDATED && (
-        <>
-          {Object.entries(byAccount).map(([accountNumber, items]) => (
-            <section key={accountNumber}>
-              <h5>
-                {copy.account} {accountNumber}
-              </h5>
-              <HoldingsTable products={items} copy={{ ...copy, total: copy.subtotal }} />
-            </section>
-          ))}
-          <p className="statement-doc__grand">
-            {copy.total}: {formatCurrency(products.reduce((sum, p) => sum + p.value, 0))}
-          </p>
-        </>
-      )}
+  test('disabled options carry a reason', () => {
+    const consolidated = allowedStatementTypes(selection('PA1'), customer).find(
+      (r) => r.type === TYPES.CONSOLIDATED
+    );
+    expect(consolidated.enabled).toBe(false);
+    expect(consolidated.reasonKey).toBe('statements.reasonNeedsTwoAccounts');
+  });
+});
 
-      {/* Account statement with per-product detail — holdings plus that
-          product's own activity, one section each. */}
-      {statementType === TYPES.ACCOUNT && detailLevel === DETAIL_LEVELS.PRODUCT_DETAILS && (
-        <>
-          {products.map((product) => (
-            <section key={product.id}>
-              <h5>
-                {product.name} · {product.accountNumber}
-              </h5>
-              <HoldingsTable products={[product]} copy={copy} />
-              <p className="statement-doc__label">{copy.activity}</p>
-              <TransactionTable
-                transactions={transactions.filter((tx) => tx.productId === product.id)}
-                copy={copy}
-                docLanguage={docLanguage}
-              />
-            </section>
-          ))}
-        </>
-      )}
+describe('defaultStatementTypeFor', () => {
+  test('picks a sensible default per shape', () => {
+    expect(defaultStatementTypeFor(portfolio, customer)).toBe(TYPES.PORTFOLIO);
+    expect(defaultStatementTypeFor(selection('PA1'), customer)).toBe(TYPES.ACCOUNT);
+    expect(defaultStatementTypeFor(selection('PA1', 'PB1'), customer)).toBe(TYPES.CONSOLIDATED);
+    expect(defaultStatementTypeFor(selection(), customer)).toBeNull();
+  });
 
-      {/* Holdings summary, and the portfolio snapshot — one combined table. */}
-      {(statementType === TYPES.PORTFOLIO ||
-        (statementType === TYPES.ACCOUNT && detailLevel === DETAIL_LEVELS.HOLDINGS_SUMMARY)) && (
-        <HoldingsTable products={products} copy={copy} />
-      )}
+  test('every default is itself an allowed type', () => {
+    [portfolio, selection('PA1'), selection('PA1', 'PA2'), selection('PA1', 'PB1')].forEach((scope) => {
+      expect(enabledTypes(scope)).toContain(defaultStatementTypeFor(scope, customer));
+    });
+  });
+});
 
-      <p className="statement-doc__sign">{copy.sign}</p>
-    </article>
-  );
-}
+describe('showsDetailLevel', () => {
+  test('only for an Account Statement over part of one account', () => {
+    expect(showsDetailLevel(selection('PA1'), customer, TYPES.ACCOUNT)).toBe(true);
+    expect(showsDetailLevel(selection('PA1', 'PA2'), customer, TYPES.ACCOUNT)).toBe(false);
+    expect(showsDetailLevel(selection('PA1'), customer, TYPES.TRANSACTION)).toBe(false);
+    expect(showsDetailLevel(portfolio, customer, TYPES.PORTFOLIO)).toBe(false);
+  });
+});
+
+describe('periodModeFor', () => {
+  test('a portfolio statement is a snapshot, everything else is a range', () => {
+    expect(periodModeFor(TYPES.PORTFOLIO)).toBe('asOf');
+    expect(periodModeFor(TYPES.ACCOUNT)).toBe('range');
+    expect(periodModeFor(TYPES.TRANSACTION)).toBe('range');
+    expect(periodModeFor(TYPES.CONSOLIDATED)).toBe('range');
+  });
+});
+
+describe('validatePeriod', () => {
+  const today = new Date(2026, 7, 29); // 29 Aug 2026
+  const range = (from, to) => ({ preset: 'custom', from, to });
+
+  test('presets are always valid', () => {
+    expect(validatePeriod({ preset: 'lastMonth' }, TYPES.ACCOUNT, today).valid).toBe(true);
+    expect(validatePeriod({ preset: 'currentYear' }, TYPES.ACCOUNT, today).valid).toBe(true);
+  });
+
+  test('custom range needs both dates', () => {
+    expect(validatePeriod(range('', ''), TYPES.ACCOUNT, today).errors.from).toBe(
+      'statements.errorDateRequired'
+    );
+  });
+
+  test('rejects From after To', () => {
+    expect(validatePeriod(range('2026-06-01', '2026-05-01'), TYPES.ACCOUNT, today).errors.from).toBe(
+      'statements.errorFromAfterTo'
+    );
+  });
+
+  test('rejects a future To', () => {
+    expect(validatePeriod(range('2026-01-01', '2027-01-01'), TYPES.ACCOUNT, today).errors.to).toBe(
+      'statements.errorFuture'
+    );
+  });
+
+  test(`rejects a range longer than ${MAX_RANGE_MONTHS} months`, () => {
+    expect(validatePeriod(range('2023-01-01', '2026-01-01'), TYPES.ACCOUNT, today).errors.to).toBe(
+      'statements.errorRangeTooLong'
+    );
+  });
+
+  test('accepts a valid range', () => {
+    expect(validatePeriod(range('2026-01-01', '2026-06-01'), TYPES.ACCOUNT, today).valid).toBe(true);
+  });
+
+  test('portfolio validates asOf, not the range', () => {
+    expect(validatePeriod({ asOf: '' }, TYPES.PORTFOLIO, today).errors.asOf).toBe(
+      'statements.errorDateRequired'
+    );
+    expect(validatePeriod({ asOf: '2027-01-01' }, TYPES.PORTFOLIO, today).errors.asOf).toBe(
+      'statements.errorFuture'
+    );
+    expect(validatePeriod({ asOf: '2026-08-01' }, TYPES.PORTFOLIO, today).valid).toBe(true);
+  });
+});
+
+describe('resolvePeriodRange', () => {
+  const today = new Date(2026, 7, 29);
+
+  test('currentYear runs from 1 January', () => {
+    expect(resolvePeriodRange({ preset: 'currentYear' }, TYPES.ACCOUNT, today)).toEqual({
+      from: '2026-01-01',
+      to: '2026-08-29',
+    });
+  });
+
+  test('sixMonths counts back six months', () => {
+    expect(resolvePeriodRange({ preset: 'sixMonths' }, TYPES.ACCOUNT, today).from).toBe('2026-02-28');
+  });
+
+  test('custom passes the dates through', () => {
+    expect(
+      resolvePeriodRange({ preset: 'custom', from: '2026-03-01', to: '2026-04-01' }, TYPES.ACCOUNT, today)
+    ).toEqual({ from: '2026-03-01', to: '2026-04-01' });
+  });
+
+  test('portfolio returns an asOf date', () => {
+    expect(resolvePeriodRange({ asOf: '2026-08-01' }, TYPES.PORTFOLIO, today)).toEqual({
+      asOf: '2026-08-01',
+    });
+  });
+});
+
+describe('transactionsFor', () => {
+  const wide = { from: '2020-01-01', to: '2030-01-01' };
+
+  test('a whole account takes its entire ledger', () => {
+    const ids = transactionsFor(selection('PA1', 'PA2'), customer, wide).map((tx) => tx.id);
+    expect(ids.sort()).toEqual(['T1', 'T2']);
+  });
+
+  test('a product-level selection takes only that product activity', () => {
+    expect(transactionsFor(selection('PA1'), customer, wide).map((tx) => tx.id)).toEqual(['T1']);
+  });
+
+  test('activity outside the range is excluded', () => {
+    expect(
+      transactionsFor(selection('PA1'), customer, { from: '2026-08-11', to: '2026-08-12' })
+    ).toHaveLength(0);
+  });
+
+  test('portfolio mode takes every account', () => {
+    expect(transactionsFor(portfolio, customer, wide)).toHaveLength(3);
+  });
+
+  test('newest first', () => {
+    const dates = transactionsFor(portfolio, customer, wide).map((tx) => tx.date);
+    expect(dates).toEqual([...dates].sort().reverse());
+  });
+});
+
+describe('detail levels', () => {
+  test('are the two the brief asks for', () => {
+    expect(Object.values(DETAIL_LEVELS)).toEqual(['productDetails', 'holdingsSummary']);
+  });
+});
+
+
+
+
