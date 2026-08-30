@@ -292,3 +292,91 @@ public class LoginThrottleService {
         return remote == null ? "unknown" : remote;
     }
 }
+
+
+
+package com.sc.wealthcore.service;
+
+import com.sc.wealthcore.config.AuthProperties;
+import com.sc.wealthcore.entity.LoginAttempt;
+import com.sc.wealthcore.repository.LoginAttemptRepository;
+import jakarta.servlet.http.HttpServletRequest;
+import java.time.Instant;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Owner: Rajnish — US03. Decides when to demand a CAPTCHA and when to lock.
+ *
+ * <p>Counters are derived from {@link LoginAttempt} rows inside a rolling window, which
+ * means a lock expires by itself: once the failures age out of the window the count drops
+ * back under the threshold. There is no unlock job and no locked_until column to keep in
+ * sync with reality.
+ */
+@Service
+public class LoginThrottleService {
+
+    private final LoginAttemptRepository attempts;
+    private final AuthProperties properties;
+
+    public LoginThrottleService(LoginAttemptRepository attempts, AuthProperties properties) {
+        this.attempts = attempts;
+        this.properties = properties;
+    }
+
+    /** Snapshot of how throttled this (username, caller) pair currently is. */
+    public record Status(boolean captchaRequired, boolean locked, long failures) {}
+
+    @Transactional(readOnly = true)
+    public Status statusFor(String username, String ip) {
+        Instant now = Instant.now();
+        Instant failureSince = now.minus(properties.getFailureWindow());
+        Instant lockSince = now.minus(properties.getLockDuration());
+
+        // Whichever axis is worse decides. A per-username counter alone misses spraying
+        // across many usernames from one host; a per-IP counter alone misses a
+        // distributed attack on a single account.
+        long failures = Math.max(
+                attempts.countRecentFailuresByUsername(username, failureSince),
+                attempts.countRecentFailuresByIp(ip, failureSince));
+
+        long lockWindowFailures = Math.max(
+                attempts.countRecentFailuresByUsername(username, lockSince),
+                attempts.countRecentFailuresByIp(ip, lockSince));
+
+        return new Status(
+                failures >= properties.getCaptchaAfterFailures(),
+                lockWindowFailures >= properties.getLockAfterFailures(),
+                failures);
+    }
+
+    /**
+     * Written in its own transaction. The attempt must survive even when the surrounding
+     * request ends in an exception — otherwise a rollback would erase the very failure
+     * the counter exists to record, and the lockout could never trip.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public void record(String username, String ip, LoginAttempt.Outcome outcome) {
+        attempts.save(new LoginAttempt(username == null ? "" : username, ip, outcome));
+    }
+
+    public long lockRetryAfterSeconds() {
+        return properties.getLockDuration().toSeconds();
+    }
+
+    /**
+     * Best-effort client address. X-Forwarded-For is only trustworthy behind a proxy that
+     * overwrites it, so this is a throttling hint and never an authorisation input.
+     */
+    public String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            String first = forwarded.split(",")[0].trim();
+            if (!first.isEmpty()) {
+                return first.length() > 45 ? first.substring(0, 45) : first;
+            }
+        }
+        String remote = request.getRemoteAddr();
+        return remote == null ? "unknown" : remote;
+    }
+}
