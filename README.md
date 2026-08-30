@@ -224,122 +224,243 @@ StatementPage.jsx should end up a thin shell: state + which step renders + foote
 
 
 
+package com.sc.wealthcore.service;
+
 import com.sc.wealthcore.dto.CaptchaResponse;
 import com.sc.wealthcore.dto.LoginRequest;
 import com.sc.wealthcore.dto.LoginResponse;
 import com.sc.wealthcore.dto.MfaVerifyRequest;
 import com.sc.wealthcore.dto.RmProfile;
-import com.sc.wealthcore.service.AuthService;
-import com.sc.wealthcore.service.CaptchaService;
+import com.sc.wealthcore.entity.LoginAttempt.Outcome;
+import com.sc.wealthcore.entity.RelationshipManager;
+import com.sc.wealthcore.exception.AuthExceptions;
+import com.sc.wealthcore.repository.RelationshipManagerRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
-import jakarta.validation.Valid;
-import java.util.Map;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-/**
- * Owner: Rajnish — US03. The sign-in endpoints.
- *
- * <p>Thin by design: no business rules, no try/catch, no error bodies. Failures are
- * thrown as {@code ApiException}s and shaped centrally by {@code GlobalExceptionHandler},
- * which is what keeps every failure message consistent — and consistently uninformative
- * to an attacker.
- *
- * <p>Everything here is reachable without a session; the security config permits
- * {@code /auth/**}. The context path adds the {@code /api} prefix.
- */
-@RestController
-@RequestMapping("/auth")
-public class AuthController {
-
-    private final AuthService authService;
-    private final CaptchaService captchaService;
-
-    public AuthController(AuthService authService, CaptchaService captchaService) {
-        this.authService = authService;
-        this.captchaService = captchaService;
-    }
-
-    /**
-     * A CAPTCHA image on demand — used by the refresh button, and when the browser wants
-     * a challenge before submitting. Issuing one is harmless: it proves nothing on its
-     * own, and the login endpoint decides whether an answer is actually required.
-     */
-    @GetMapping("/captcha")
-    public CaptchaResponse captcha(HttpSession session) {
-        return captchaService.issue(session);
-    }
-
-    /**
-     * Credentials. A 200 here means the password was correct — it does <em>not</em> mean
-     * the caller is signed in. Unless MFA is disabled for the RM, the response carries
-     * {@code mfaRequired} and the session stays unauthenticated until the code is verified.
-     */
-    @PostMapping("/login")
-    public LoginResponse login(@Valid @RequestBody LoginRequest request,
-                               HttpServletRequest httpRequest,
-                               HttpSession session) {
-        return authService.login(request, httpRequest, session);
-    }
-
-    /** The emailed code. This is the call that actually establishes the session. */
-    @PostMapping("/mfa/verify")
-    public RmProfile verifyMfa(@Valid @RequestBody MfaVerifyRequest request,
-                               HttpServletRequest httpRequest,
-                               HttpSession session) {
-        return authService.verifyMfa(request, httpRequest, session);
-    }
-
-    @PostMapping("/mfa/resend")
-    public Map<String, String> resendMfa(HttpSession session) {
-        return Map.of("maskedEmail", authService.resendMfa(session));
-    }
-
-    @PostMapping("/logout")
-    public ResponseEntity<Void> logout(HttpSession session) {
-        authService.logout(session);
-        return ResponseEntity.noContent().build();
-    }
-}
-
-
-
-
-
-
-
-import com.sc.wealthcore.dto.RmProfile;
-import com.sc.wealthcore.service.AuthService;
+import java.util.List;
+import java.util.Optional;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owner: Rajnish — US03. The signed-in RM.
+ * Owner: Rajnish — US03. Orchestrates sign-in: throttle, CAPTCHA, password, second factor.
  *
- * <p>Outside {@code /auth/**}, so the security config requires a session: an
- * unauthenticated call gets a 401 from the entry point before it ever reaches this class.
- * The React app calls this on boot to restore a session, which is what replaced trusting
- * a user object out of localStorage.
+ * <p>The ordering is the security design. A caller is only authenticated at the very last
+ * step, in {@link #verifyMfa}: passing the password establishes nothing but a pending
+ * challenge on the session, so an interrupted sign-in grants no access at all.
  */
-@RestController
-@RequestMapping("/rm")
-public class RmController {
+@Service
+public class AuthService {
 
-    private final AuthService authService;
+    private final RelationshipManagerRepository relationshipManagers;
+    private final PasswordEncoder passwordEncoder;
+    private final LoginThrottleService throttle;
+    private final CaptchaService captcha;
+    private final MfaService mfa;
 
-    public RmController(AuthService authService) {
-        this.authService = authService;
+    /**
+     * A real hash of a random value nobody knows, compared against when the username does
+     * not exist. Without it, "no such user" returns immediately while "wrong password"
+     * spends ~100ms hashing — a difference that is trivially measurable over a network and
+     * turns this endpoint into a user-enumeration oracle.
+     *
+     * <p>Generated here from the injected encoder rather than pasted in as a literal, so
+     * it is guaranteed to be a well-formed hash at the configured cost. A malformed
+     * literal would make {@code matches} bail out early and silently undo the defence.
+     */
+    private final String dummyHash;
+
+    public AuthService(RelationshipManagerRepository relationshipManagers,
+                       PasswordEncoder passwordEncoder,
+                       LoginThrottleService throttle,
+                       CaptchaService captcha,
+                       MfaService mfa) {
+        this.relationshipManagers = relationshipManagers;
+        this.passwordEncoder = passwordEncoder;
+        this.throttle = throttle;
+        this.captcha = captcha;
+        this.mfa = mfa;
+        this.dummyHash = passwordEncoder.encode(java.util.UUID.randomUUID().toString());
     }
 
-    @GetMapping("/me")
-    public RmProfile me(Authentication authentication) {
-        return authService.currentRm(authentication);
+    /** Step one: credentials (plus a CAPTCHA once the caller has been failing). */
+    @Transactional
+    public LoginResponse login(LoginRequest request, HttpServletRequest httpRequest, HttpSession session) {
+        String username = request.username().trim();
+        String ip = throttle.clientIp(httpRequest);
+
+        LoginThrottleService.Status status = throttle.statusFor(username, ip);
+
+        // Locked wins over everything. Note the correct password will not get past this
+        // either — that is the point of a lockout.
+        if (status.locked()) {
+            throttle.record(username, ip, Outcome.LOCKED);
+            throw new AuthExceptions.AccountLocked(throttle.lockRetryAfterSeconds(),
+                    "Locked out: " + username + " from " + ip);
+        }
+
+        // The CAPTCHA gate sits in front of the password check, so a bot cannot use this
+        // endpoint as a password oracle even at one guess per challenge.
+        if (status.captchaRequired()) {
+            boolean solved = captcha.verifyAndConsume(session, request.captchaAnswer());
+            if (!solved) {
+                throttle.record(username, ip, Outcome.CAPTCHA_FAILED);
+                CaptchaResponse fresh = captcha.issue(session);
+                throw new AuthExceptions.CaptchaRequired(
+                        fresh.imageDataUri(),
+                        fresh.expiresInSeconds(),
+                        request.captchaAnswer() == null
+                                ? "Please complete the security check."
+                                : "That security check was not correct. Try the new image.",
+                        "CAPTCHA gate for " + username + " from " + ip);
+            }
+        }
+
+        Optional<RelationshipManager> found =
+                relationshipManagers.findByUsernameIgnoreCase(username);
+
+        // Always hash something, whether or not the user exists — see dummyHash.
+        String hashToCheck = found.map(RelationshipManager::getPasswordHash).orElse(dummyHash);
+        boolean passwordOk = passwordEncoder.matches(request.password(), hashToCheck);
+
+        if (found.isEmpty() || !passwordOk) {
+            throttle.record(username, ip, Outcome.BAD_CREDENTIALS);
+            // One exception type, one message, for both causes. The log distinguishes
+            // them; the response does not.
+            throw new AuthExceptions.InvalidCredentials(found.isEmpty()
+                    ? "No such user: " + username + " from " + ip
+                    : "Wrong password for " + username + " from " + ip);
+        }
+
+        RelationshipManager rm = found.get();
+
+        // MFA off for this RM: sign in here. Still a fresh session, so a pre-auth session
+        // id cannot be replayed.
+        if (!rm.isMfaEnabled()) {
+            throttle.record(username, ip, Outcome.SUCCESS);
+            authenticate(rm, httpRequest);
+            return LoginResponse.signedIn(RmProfile.from(rm));
+        }
+
+        // Password was right, but nothing is granted yet.
+        mfa.startChallenge(session, rm);
+        return LoginResponse.mfaChallenge(MfaService.maskEmail(rm.getEmail()), mfa.resendCooldownSeconds());
+    }
+
+    /** Step two: the emailed code. Only here does the caller actually become authenticated. */
+    @Transactional
+    public RmProfile verifyMfa(MfaVerifyRequest request, HttpServletRequest httpRequest, HttpSession session) {
+        String ip = throttle.clientIp(httpRequest);
+        String rmId = mfa.pendingRmId(session);
+
+        MfaService.Result result = mfa.verify(session, request.code());
+
+        if (result != MfaService.Result.OK) {
+            // Recorded against the throttle counters, so guessing codes trips the same
+            // lockout that guessing passwords does.
+            throttle.record(rmId == null ? "" : rmId, ip, Outcome.MFA_FAILED);
+            throw switch (result) {
+                case NO_CHALLENGE -> new AuthExceptions.MfaNotPending("No pending code from " + ip);
+                case EXPIRED -> new AuthExceptions.MfaCodeExpired("Expired code for " + rmId);
+                case TOO_MANY_ATTEMPTS -> new AuthExceptions.MfaAttemptsExhausted("Attempts used up for " + rmId);
+                default -> new AuthExceptions.MfaCodeInvalid("Wrong code for " + rmId);
+            };
+        }
+
+        RelationshipManager rm = relationshipManagers.findById(rmId)
+                // The RM was deleted between password and code. Treat as a failed sign-in.
+                .orElseThrow(() -> new AuthExceptions.MfaNotPending("Pending RM vanished: " + rmId));
+
+        throttle.record(rm.getUsername(), ip, Outcome.SUCCESS);
+        authenticate(rm, httpRequest);
+        return RmProfile.from(rm);
+    }
+
+    /** Sends a replacement code, subject to the cooldown. */
+    @Transactional(readOnly = true)
+    public String resendMfa(HttpSession session) {
+        String rmId = mfa.pendingRmId(session);
+        if (rmId == null) {
+            throw new AuthExceptions.MfaNotPending("Resend with no pending challenge");
+        }
+
+        long wait = mfa.resendWaitSeconds(session);
+        if (wait > 0) {
+            throw new AuthExceptions.ResendTooSoon(wait, "Resend too soon for " + rmId);
+        }
+
+        RelationshipManager rm = relationshipManagers.findById(rmId)
+                .orElseThrow(() -> new AuthExceptions.MfaNotPending("Pending RM vanished: " + rmId));
+
+        // Issues a brand new code and invalidates the previous one.
+        mfa.startChallenge(session, rm);
+        return MfaService.maskEmail(rm.getEmail());
+    }
+
+    public void logout(HttpSession session) {
+        mfa.clear(session);
+        SecurityContextHolder.clearContext();
+        // Kills the server-side session outright, so the cookie the browser keeps is inert.
+        session.invalidate();
+    }
+
+    @Transactional(readOnly = true)
+    public RmProfile currentRm(Authentication authentication) {
+        return RmProfile.from(requireRm(authentication));
+    }
+
+    /**
+     * The signed-in RM's id, for the endpoints that scope their queries by it.
+     *
+     * <p>The session carries a username, not an id, so this resolves one to the other.
+     * Every data endpoint goes through here rather than trusting an id from the request —
+     * an RM id taken from a path or a body would let anyone read another RM's book.
+     */
+    @Transactional(readOnly = true)
+    public String currentRmId(Authentication authentication) {
+        return requireRm(authentication).getId();
+    }
+
+    private RelationshipManager requireRm(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new AuthExceptions.InvalidCredentials("No authentication on the request");
+        }
+        return relationshipManagers.findByUsernameIgnoreCase(authentication.getName())
+                .orElseThrow(() -> new AuthExceptions.InvalidCredentials(
+                        "Session references a missing RM: " + authentication.getName()));
+    }
+
+    /**
+     * Establishes the authenticated session.
+     *
+     * <p>{@code changeSessionId()} is the session-fixation defence: whatever session id
+     * carried the pre-auth challenge is discarded and a new one issued, so an id an
+     * attacker planted or observed beforehand is worthless.
+     *
+     * <p>The context is saved explicitly because this authentication does not run through
+     * a Spring Security filter — without the save it would live only for this request and
+     * the very next call would be a 401.
+     */
+    private void authenticate(RelationshipManager rm, HttpServletRequest httpRequest) {
+        httpRequest.changeSessionId();
+
+        User principal = new User(rm.getUsername(), rm.getPasswordHash(), List.of());
+        Authentication authentication =
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+
+        SecurityContext context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(authentication);
+        SecurityContextHolder.setContext(context);
+
+        httpRequest.getSession().setAttribute(
+                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
     }
 }
+
