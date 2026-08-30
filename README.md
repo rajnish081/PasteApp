@@ -219,3 +219,292 @@ StatementPage.jsx should end up a thin shell: state + which step renders + foote
 | `mfa_enabled` | BOOLEAN | Not Null, Default `true` | Determines whether email OTP MFA is required |
 | `created_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was created |
 | `updated_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was last updated |
+
+
+
+
+
+
+
+
+package com.sc.wealthcore.config;
+
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/**
+ * Owner: Rajnish — US03.
+ *
+ * Every brute-force and OTP threshold, bound from `wealthcore.auth` in application.yml.
+ * These are configuration, not constants: a demo wants a short lockout, production wants
+ * a long one, and the tests want the resend cooldown at zero.
+ */
+@ConfigurationProperties(prefix = "wealthcore.auth")
+public class AuthProperties {
+
+    /** Failures within the window before the login form starts demanding a CAPTCHA. */
+    private int captchaAfterFailures = 3;
+
+    /** Failures within the window before the account is locked outright. */
+    private int lockAfterFailures = 5;
+
+    /** How far back failures are counted. */
+    private Duration failureWindow = Duration.ofMinutes(15);
+
+    /** How long a lock lasts once tripped. */
+    private Duration lockDuration = Duration.ofMinutes(15);
+
+    private int otpLength = 6;
+    private Duration otpTtl = Duration.ofMinutes(5);
+    private int otpMaxAttempts = 5;
+    private Duration otpResendCooldown = Duration.ofSeconds(60);
+    private String otpFrom = "no-reply@sc.com";
+
+    public int getCaptchaAfterFailures() { return captchaAfterFailures; }
+    public void setCaptchaAfterFailures(int v) { this.captchaAfterFailures = v; }
+
+    public int getLockAfterFailures() { return lockAfterFailures; }
+    public void setLockAfterFailures(int v) { this.lockAfterFailures = v; }
+
+    public Duration getFailureWindow() { return failureWindow; }
+    public void setFailureWindow(Duration v) { this.failureWindow = v; }
+
+    public Duration getLockDuration() { return lockDuration; }
+    public void setLockDuration(Duration v) { this.lockDuration = v; }
+
+    public int getOtpLength() { return otpLength; }
+    public void setOtpLength(int v) { this.otpLength = v; }
+
+    public Duration getOtpTtl() { return otpTtl; }
+    public void setOtpTtl(Duration v) { this.otpTtl = v; }
+
+    public int getOtpMaxAttempts() { return otpMaxAttempts; }
+    public void setOtpMaxAttempts(int v) { this.otpMaxAttempts = v; }
+
+    public Duration getOtpResendCooldown() { return otpResendCooldown; }
+    public void setOtpResendCooldown(Duration v) { this.otpResendCooldown = v; }
+
+    public String getOtpFrom() { return otpFrom; }
+    public void setOtpFrom(String v) { this.otpFrom = v; }
+}
+
+
+
+
+
+
+package com.sc.wealthcore.config;
+
+import com.sc.wealthcore.entity.RelationshipManager;
+import com.sc.wealthcore.repository.RelationshipManagerRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Component;
+
+/**
+ * Owner: Rajnish. Gives the demo RM a usable password on startup.
+ *
+ * <p>V3__seed_demo_data.sql inserts RM001 with {@code '!'} as its hash — a value BCrypt
+ * can never match, so the account exists (customers can reference it) but nobody can sign
+ * in. This sets the real hash.
+ *
+ * <p>Deliberately not done in the migration. Seeding a user means seeding a password hash,
+ * and a hash written into SQL by hand cannot be checked until someone fails to sign in
+ * with it. Hashing here uses the very {@link PasswordEncoder} bean that will later verify
+ * it, so the seeded account cannot be subtly wrong. Flyway still owns the schema.
+ *
+ * <p>Guarded twice — by {@code wealthcore.demo.seed-enabled} and by a check that the hash
+ * is still the placeholder — so it is inert in tests and can never reset a password
+ * somebody has already changed.
+ */
+@Component
+public class DemoDataSeeder implements ApplicationRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(DemoDataSeeder.class);
+
+    private final RelationshipManagerRepository relationshipManagers;
+    private final PasswordEncoder passwordEncoder;
+    private final DemoProperties properties;
+
+    public DemoDataSeeder(RelationshipManagerRepository relationshipManagers,
+                          PasswordEncoder passwordEncoder,
+                          DemoProperties properties) {
+        this.relationshipManagers = relationshipManagers;
+        this.passwordEncoder = passwordEncoder;
+        this.properties = properties;
+    }
+
+    /** The placeholder the migration inserts. BCrypt never matches it. */
+    private static final String UNUSABLE_HASH = "!";
+
+    @Override
+    public void run(ApplicationArguments args) {
+        if (!properties.isSeedEnabled()) return;
+
+        if (properties.getRmPassword() == null || properties.getRmPassword().isBlank()) {
+            log.warn("Demo seeding is on but wealthcore.demo.rm-password is empty — skipping.");
+            return;
+        }
+
+        String username = properties.getRmUsername();
+        RelationshipManager rm = relationshipManagers.findByUsernameIgnoreCase(username).orElse(null);
+
+        if (rm == null) {
+            log.warn("Demo RM {} is not in the database — did V3__seed_demo_data.sql run?", username);
+            return;
+        }
+
+        if (!UNUSABLE_HASH.equals(rm.getPasswordHash())) {
+            // Somebody has a working password already. A restart must never reset it.
+            log.info("Demo RM {} already has a password — leaving it alone.", username);
+            return;
+        }
+
+        rm.setPasswordHash(passwordEncoder.encode(properties.getRmPassword()));
+        relationshipManagers.save(rm);
+
+        // The password itself is never logged, only the fact that it was set.
+        log.info("Set the demo password for {} from wealthcore.demo.rm-password.", username);
+    }
+}
+
+
+
+
+
+
+package com.sc.wealthcore.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/**
+ * Owner: Rajnish. Settings for the dev-only demo RM.
+ *
+ * <p>The password is configuration, never a committed hash: {@code DemoDataSeeder} hashes
+ * it at startup with the same encoder that verifies it, so the seeded account is correct
+ * by construction. A pre-computed hash pasted into a migration is unverifiable until
+ * someone tries to sign in with it.
+ */
+@ConfigurationProperties(prefix = "wealthcore.demo")
+public class DemoProperties {
+
+    private boolean seedEnabled = false;
+    private String rmUsername = "RM001";
+    private String rmPassword;
+
+    public boolean isSeedEnabled() { return seedEnabled; }
+    public void setSeedEnabled(boolean v) { this.seedEnabled = v; }
+
+    public String getRmUsername() { return rmUsername; }
+    public void setRmUsername(String v) { this.rmUsername = v; }
+
+    public String getRmPassword() { return rmPassword; }
+    public void setRmPassword(String v) { this.rmPassword = v; }
+}
+
+
+
+
+
+
+package com.sc.wealthcore.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.annotation.Order;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+
+/**
+ * Owner: Rajnish — US03.
+ *
+ * Session-cookie authentication. There is no JWT: the browser holds a JSESSIONID and
+ * the server holds the session, which is what the user story specifies and what lets
+ * logout genuinely invalidate access.
+ */
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    @Order(1)
+    public SecurityFilterChain apiFilterChain(HttpSecurity http) throws Exception {
+        // Cookie-based CSRF so the SPA can read the token and echo it back as a header.
+        //
+        // Spring Security 6 ships XorCsrfTokenRequestAttributeHandler by default, which
+        // defers resolving the token until something reads the request attribute. For an
+        // SPA that never renders a server-side form, nothing ever reads it, so the cookie
+        // is never written and every mutating request 403s. Using the plain handler with
+        // a null attribute name opts out of that deferral.
+        CsrfTokenRequestAttributeHandler csrfHandler = new CsrfTokenRequestAttributeHandler();
+        csrfHandler.setCsrfRequestAttributeName(null);
+
+        http
+            .csrf(csrf -> csrf
+                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                .csrfTokenRequestHandler(csrfHandler))
+
+            .authorizeHttpRequests(auth -> auth
+                // The login flow itself must be reachable without a session.
+                .requestMatchers("/auth/**").permitAll()
+                .requestMatchers("/actuator/health").permitAll()
+                // API docs. Public because this is a demo build — before anything ships,
+                // put these behind authentication: they enumerate every endpoint.
+                .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
+                // Everything else, including /rm/me, needs one.
+                .anyRequest().authenticated())
+
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                // A new session id is issued the moment the second factor passes, so a
+                // session id observed during the pre-auth phase cannot be replayed as an
+                // authenticated one.
+                .sessionFixation(sessionFixation -> sessionFixation.newSession()))
+
+            // No login page and no HTTP Basic prompt — an unauthenticated API call gets a
+            // clean 401 for the SPA to handle, not a redirect or a browser dialog.
+            .exceptionHandling(ex -> ex.authenticationEntryPoint(
+                (request, response, authException) -> response.sendError(401)))
+
+            .formLogin(form -> form.disable())
+            .httpBasic(basic -> basic.disable())
+            .logout(logout -> logout.disable());
+
+        return http.build();
+    }
+
+    /**
+     * Dev only. The H2 console needs frames and its own CSRF exemption, neither of which
+     * belongs anywhere near the API chain. Guarded by @Profile so it cannot leak into a
+     * deployed build — the console is a remote code execution surface.
+     */
+    @Bean
+    @Order(0)
+    @Profile("dev")
+    public SecurityFilterChain h2ConsoleFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher(AntPathRequestMatcher.antMatcher("/h2-console/**"))
+            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+            .csrf(csrf -> csrf.disable())
+            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
+            .formLogin(Customizer.withDefaults());
+        return http.build();
+    }
+}
