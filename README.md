@@ -207,151 +207,88 @@ StatementPage.jsx should end up a thin shell: state + which step renders + foote
 
 
 
-| Field | Type | Constraints | Meaning |
-|---|---|---|---|
-| `id` | BIGINT | Primary Key, Not Null, Auto-generated | Unique ID of the Relationship Manager |
-| `username` | VARCHAR | Not Null, Unique | Login username of the RM |
-| `password_hash` | VARCHAR | Not Null | BCrypt-hashed login password; the actual password is never stored |
-| `name` | VARCHAR | Not Null | Full name of the Relationship Manager |
-| `initials` | VARCHAR | Not Null | Short initials used for display, e.g. `RK` |
-| `email` | VARCHAR | Not Null | RM's email address used for MFA OTP |
-| `branch` | VARCHAR | Not Null | Branch associated with the RM |
-| `mfa_enabled` | BOOLEAN | Not Null, Default `true` | Determines whether email OTP MFA is required |
-| `created_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was created |
-| `updated_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was last updated |
-
-
 package com.sc.wealthcore.service;
 
-import com.sc.wealthcore.dto.CaptchaResponse;
-import jakarta.servlet.http.HttpSession;
-import java.awt.BasicStroke;
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.geom.AffineTransform;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.Serializable;
-import java.security.SecureRandom;
-import java.time.Duration;
+import com.sc.wealthcore.config.AuthProperties;
+import com.sc.wealthcore.entity.LoginAttempt;
+import com.sc.wealthcore.repository.LoginAttemptRepository;
+import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
-import java.util.Base64;
-import java.util.Locale;
-import javax.imageio.ImageIO;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owner: Rajnish — US03. Self-contained image CAPTCHA.
+ * Owner: Rajnish — US03. Decides when to demand a CAPTCHA and when to lock.
  *
- * <p>Generated in-process with java.awt: no API keys, no outbound call, and nothing to
- * fail during an offline demo. The challenge lives on the HTTP session rather than in the
- * database, so it expires on its own, needs no cleanup job, and cannot be solved in one
- * browser and redeemed in another.
- *
- * <p>Only the answer is held server-side; the client receives an image and nothing else.
+ * <p>Counters are derived from {@link LoginAttempt} rows inside a rolling window, which
+ * means a lock expires by itself: once the failures age out of the window the count drops
+ * back under the threshold. There is no unlock job and no locked_until column to keep in
+ * sync with reality.
  */
 @Service
-public class CaptchaService {
+public class LoginThrottleService {
 
-    /** No 0/O/1/I/5/S — indistinguishable once distorted, and users get them wrong. */
-    private static final String ALPHABET = "ABCDEFGHJKLMNPQRTUVWXYZ2346789";
-    private static final int LENGTH = 5;
-    private static final int WIDTH = 190;
-    private static final int HEIGHT = 60;
-    private static final Duration TTL = Duration.ofMinutes(5);
+    private final LoginAttemptRepository attempts;
+    private final AuthProperties properties;
 
-    public static final String SESSION_KEY = "wealthcore.captcha";
+    public LoginThrottleService(LoginAttemptRepository attempts, AuthProperties properties) {
+        this.attempts = attempts;
+        this.properties = properties;
+    }
 
-    private final SecureRandom random = new SecureRandom();
+    /** Snapshot of how throttled this (username, caller) pair currently is. */
+    public record Status(boolean captchaRequired, boolean locked, long failures) {}
 
-    /**
-     * What the session holds. Serializable because a session may be persisted or
-     * replicated; a plain record would break the moment sessions leave memory.
-     */
-    record Stored(String answer, Instant expiresAt) implements Serializable {}
+    @Transactional(readOnly = true)
+    public Status statusFor(String username, String ip) {
+        Instant now = Instant.now();
+        Instant failureSince = now.minus(properties.getFailureWindow());
+        Instant lockSince = now.minus(properties.getLockDuration());
 
-    public CaptchaResponse issue(HttpSession session) {
-        StringBuilder text = new StringBuilder(LENGTH);
-        for (int i = 0; i < LENGTH; i++) {
-            text.append(ALPHABET.charAt(random.nextInt(ALPHABET.length())));
-        }
-        String answer = text.toString();
+        // Whichever axis is worse decides. A per-username counter alone misses spraying
+        // across many usernames from one host; a per-IP counter alone misses a
+        // distributed attack on a single account.
+        long failures = Math.max(
+                attempts.countRecentFailuresByUsername(username, failureSince),
+                attempts.countRecentFailuresByIp(ip, failureSince));
 
-        session.setAttribute(SESSION_KEY, new Stored(answer, Instant.now().plus(TTL)));
-        return new CaptchaResponse(render(answer), TTL.toSeconds());
+        long lockWindowFailures = Math.max(
+                attempts.countRecentFailuresByUsername(username, lockSince),
+                attempts.countRecentFailuresByIp(ip, lockSince));
+
+        return new Status(
+                failures >= properties.getCaptchaAfterFailures(),
+                lockWindowFailures >= properties.getLockAfterFailures(),
+                failures);
     }
 
     /**
-     * Verifies and consumes in one step. The challenge is removed whether or not the
-     * answer was right, so a correct answer cannot be replayed and a wrong one cannot be
-     * ground down against the same image.
+     * Written in its own transaction. The attempt must survive even when the surrounding
+     * request ends in an exception — otherwise a rollback would erase the very failure
+     * the counter exists to record, and the lockout could never trip.
      */
-    public boolean verifyAndConsume(HttpSession session, String submitted) {
-        Object raw = session.getAttribute(SESSION_KEY);
-        session.removeAttribute(SESSION_KEY);
-
-        if (!(raw instanceof Stored stored) || submitted == null) return false;
-        if (Instant.now().isAfter(stored.expiresAt())) return false;
-
-        return stored.answer().equalsIgnoreCase(submitted.trim().toUpperCase(Locale.ROOT));
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public void record(String username, String ip, LoginAttempt.Outcome outcome) {
+        attempts.save(new LoginAttempt(username == null ? "" : username, ip, outcome));
     }
 
-    private String render(String text) {
-        BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = image.createGraphics();
-        try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+    public long lockRetryAfterSeconds() {
+        return properties.getLockDuration().toSeconds();
+    }
 
-            g.setColor(new Color(0xF2, 0xF6, 0xF4));
-            g.fillRect(0, 0, WIDTH, HEIGHT);
-
-            // Speckle first, so it sits behind the glyphs.
-            g.setStroke(new BasicStroke(1f));
-            for (int i = 0; i < 90; i++) {
-                g.setColor(new Color(random.nextInt(0x60) + 0x90, random.nextInt(0x60) + 0x90,
-                        random.nextInt(0x60) + 0x90));
-                int x = random.nextInt(WIDTH);
-                int y = random.nextInt(HEIGHT);
-                g.drawLine(x, y, x + random.nextInt(3), y + random.nextInt(3));
+    /**
+     * Best-effort client address. X-Forwarded-For is only trustworthy behind a proxy that
+     * overwrites it, so this is a throttling hint and never an authorisation input.
+     */
+    public String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            String first = forwarded.split(",")[0].trim();
+            if (!first.isEmpty()) {
+                return first.length() > 45 ? first.substring(0, 45) : first;
             }
-
-            int x = 18;
-            for (char c : text.toCharArray()) {
-                AffineTransform saved = g.getTransform();
-
-                // Each glyph gets its own rotation and baseline. A uniform baseline is
-                // trivially segmented and read by an off-the-shelf OCR pass.
-                double angle = (random.nextDouble() - 0.5) * 0.7;
-                int y = 40 + random.nextInt(9) - 4;
-                g.rotate(angle, x, y);
-
-                g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 32 + random.nextInt(8)));
-                g.setColor(new Color(random.nextInt(0x50), random.nextInt(0x50), random.nextInt(0x70)));
-                g.drawString(String.valueOf(c), x, y);
-
-                g.setTransform(saved);
-                x += 30 + random.nextInt(6);
-            }
-
-            // Two strokes straight through, to break the glyphs up.
-            g.setStroke(new BasicStroke(2f));
-            for (int i = 0; i < 2; i++) {
-                g.setColor(new Color(random.nextInt(0x80), random.nextInt(0x80), random.nextInt(0x80)));
-                g.drawLine(0, random.nextInt(HEIGHT), WIDTH, random.nextInt(HEIGHT));
-            }
-        } finally {
-            g.dispose();
         }
-
-        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            ImageIO.write(image, "png", out);
-            return "data:image/png;base64," + Base64.getEncoder().encodeToString(out.toByteArray());
-        } catch (IOException e) {
-            // An in-memory stream; an IOException here means something is very wrong.
-            throw new IllegalStateException("Could not render CAPTCHA", e);
-        }
+        String remote = request.getRemoteAddr();
+        return remote == null ? "unknown" : remote;
     }
 }
