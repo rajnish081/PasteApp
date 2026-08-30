@@ -1,136 +1,146 @@
-Here's a copy-paste prompt for Copilot. It's written so the backend constraint is impossible to miss — it appears first, and again at the end.
+package com.sc.wealthcore.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sc.wealthcore.dto.DemoDataFile;
+import com.sc.wealthcore.entity.AccountTransaction;
+import com.sc.wealthcore.entity.Customer;
+import com.sc.wealthcore.entity.Product;
+import com.sc.wealthcore.entity.RelationshipManager;
+import com.sc.wealthcore.repository.CustomerRepository;
+import com.sc.wealthcore.repository.RelationshipManagerRepository;
+import java.io.IOException;
+import java.io.InputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
-# Task: Build a two-step login page (frontend ONLY)
+/**
+ * Owner: Rajnish. Loads the demo book on startup.
+ *
+ * <p><strong>Why this is not a migration.</strong> Flyway owns the schema, because schema
+ * changes are destructive and have to be applied in order on every machine. Demo data is
+ * neither: it changes several times a week during a sprint, and migrations are append-only,
+ * so every tweak to a pushed seed means yet another migration on top of it. Here you edit
+ * {@code demo-data.json} and restart.
+ *
+ * <p>The RM row itself stays in V3 — {@code customer.rm_id} references it, so it has to
+ * exist before Flyway hands over. This sets its password and adds everything below it.
+ *
+ * <p>Two guards make re-running safe: the whole thing is off unless
+ * {@code wealthcore.demo.seed-enabled} is set, and it skips if customers already exist.
+ * Without the second guard, every restart would duplicate the book.
+ */
+@Component
+public class DemoDataSeeder implements ApplicationRunner {
 
-## ⛔ HARD CONSTRAINT — READ FIRST
+    private static final Logger log = LoggerFactory.getLogger(DemoDataSeeder.class);
 
-Do NOT create, edit, delete, or refactor ANY file under `backend/`.
-That includes: all `.java` files, `pom.xml`, `application.yml`, `application-test.yml`,
-`db/migration/*.sql`, and `demo-data.json`.
+    /** The placeholder V3 inserts. BCrypt never matches it, so the account cannot be used. */
+    private static final String UNUSABLE_HASH = "!";
 
-The backend currently has compile errors and unresolved dependencies. That is known and
-is NOT your problem to fix. If something looks broken there, IGNORE IT and say so in your
-summary instead of touching it.
+    private static final String DATA_FILE = "demo-data.json";
 
-Work only inside `frontend/src/`.
+    private final RelationshipManagerRepository relationshipManagers;
+    private final CustomerRepository customers;
+    private final PasswordEncoder passwordEncoder;
+    private final DemoProperties properties;
+    private final ObjectMapper objectMapper;
 
-## Stack — do not change
+    public DemoDataSeeder(RelationshipManagerRepository relationshipManagers,
+                          CustomerRepository customers,
+                          PasswordEncoder passwordEncoder,
+                          DemoProperties properties,
+                          ObjectMapper objectMapper) {
+        this.relationshipManagers = relationshipManagers;
+        this.customers = customers;
+        this.passwordEncoder = passwordEncoder;
+        this.properties = properties;
+        this.objectMapper = objectMapper;
+    }
 
-- React 19, react-router-dom v6, Create React App (react-scripts 5)
-- **Add NO new npm dependencies.** No formik, no yup, no axios, no MUI, no react-hook-form.
-  Use `fetch`, `useState`, and plain CSS only.
-- Reuse the existing components, do not build new form primitives:
-  - `src/components/common/Input.jsx` — props `{ id, label, error, ...rest }`
-  - `src/components/common/Button.jsx` — props `{ variant, type, disabled, ...rest }`
-- All user-facing text goes through i18n: `const { t } = useLanguage()` from
-  `src/context/LanguageContext`. Add every new key to BOTH `src/locales/en.json` AND
-  `src/locales/zh-CN.json` — the two files must have identical key sets or the app breaks.
-- Styles go in the existing `src/features/auth/auth.css`.
+    @Override
+    @Transactional
+    public void run(ApplicationArguments args) {
+        if (!properties.isSeedEnabled()) return;
 
-## What to build
+        RelationshipManager rm = relationshipManagers
+                .findByUsernameIgnoreCase(properties.getRmUsername())
+                .orElse(null);
 
-Sign-in is TWO steps on one page. The page swaps forms based on context state; it does not
-navigate between routes.
+        if (rm == null) {
+            log.warn("RM {} is not in the database — did V3__seed_relationship_manager.sql run?",
+                    properties.getRmUsername());
+            return;
+        }
 
-**Step 1 — credentials** (`LoginForm.jsx`)
-- User ID + Password fields.
-- A CAPTCHA field that is **hidden by default** and appears ONLY after the server responds
-  with error code `CAPTCHA_REQUIRED` (which happens after ~3 failed attempts). It must NOT
-  show on a first login attempt.
-- On failure, clear the password field but keep the user ID.
+        setDemoPassword(rm);
+        seedCustomers(rm);
+    }
 
-**Step 2 — one-time code** (`MfaForm.jsx`)
-- Shown when step 1 returns `mfaRequired: true`.
-- A 6-digit numeric input. Strip non-digits on change. Use
-  `autoComplete="one-time-code"` and `inputMode="numeric"` so browsers/iOS can autofill it.
-- Show the masked destination email returned by the server.
-- "Send a new code" button, disabled during a countdown (seconds from
-  `resendCooldownSeconds`), showing the remaining seconds while disabled.
-- "Use a different account" button that returns to step 1.
-- Submit disabled until 6 digits are entered.
+    private void setDemoPassword(RelationshipManager rm) {
+        if (properties.getRmPassword() == null || properties.getRmPassword().isBlank()) {
+            log.warn("wealthcore.demo.rm-password is empty — {} will have no usable password.",
+                    rm.getUsername());
+            return;
+        }
 
-**`CaptchaField.jsx`** — renders the challenge image from a data-URI string, an answer
-input (uppercase, letter-spaced), and a refresh button.
+        if (!UNUSABLE_HASH.equals(rm.getPasswordHash())) {
+            // Somebody already has a working password. A restart must never reset it.
+            log.info("RM {} already has a password — leaving it alone.", rm.getUsername());
+            return;
+        }
 
-**`LoginPage.jsx`** — renders `<LoginForm/>` or `<MfaForm/>` depending on whether a code is
-pending. Change the card heading/subtitle between the two states.
+        rm.setPasswordHash(passwordEncoder.encode(properties.getRmPassword()));
+        relationshipManagers.save(rm);
+        // The password itself is never logged, only that it was set.
+        log.info("Set the demo password for {} from wealthcore.demo.rm-password.", rm.getUsername());
+    }
 
-## Critical security rule
+    private void seedCustomers(RelationshipManager rm) {
+        long existing = customers.count();
+        if (existing > 0) {
+            // Idempotence. Without this, every restart would append a second copy of the book.
+            log.info("{} customers already present — not seeding.", existing);
+            return;
+        }
 
-Session state must come from the SERVER, never from localStorage.
+        DemoDataFile data = read();
+        if (data == null) return;
 
-In `AuthContext`, on mount, call `GET /api/rm/me` to restore the session. Do NOT read a
-user object out of localStorage and trust it — that would let anyone forge a login by
-typing into devtools. `logout()` clears local state even if the network call fails.
+        data.customers().forEach(source -> {
+            Customer customer = new Customer(
+                    source.id(), rm, source.name(), source.nameZh(), source.email(),
+                    source.tier(), source.segment(), source.risk(), source.priority(),
+                    source.portfolioValue(), source.nextDueDate(),
+                    source.dueCategory(), source.dueReason(), source.dueAmount());
 
-Reaching step 2 does NOT mean authenticated. Only a successful code verification sets the
-user.
+            source.products().forEach(p -> customer.addProduct(new Product(
+                    p.id(), p.type(), p.name(), p.value(),
+                    p.maturityDate(), p.dueDate(), p.status())));
 
-## API contract
+            source.transactions().forEach(t -> customer.addTransaction(new AccountTransaction(
+                    t.id(), t.date(), t.description(), t.amount())));
 
-Base path `/api`. Every request: `credentials: 'include'`, and send the CSRF token read
-from the `XSRF-TOKEN` cookie as an `X-XSRF-TOKEN` header.
+            // Products and transactions cascade from the customer.
+            customers.save(customer);
+        });
 
-```
-GET  /api/auth/captcha     -> 200 { imageDataUri, expiresInSeconds }
-POST /api/auth/login       -> body { username, password, captchaAnswer? }
-                              200 { mfaRequired: true, maskedEmail, resendCooldownSeconds }
-POST /api/auth/mfa/verify  -> body { code }
-                              200 { id, name, initials, email, branch }
-POST /api/auth/mfa/resend  -> 200 { maskedEmail }
-POST /api/auth/logout      -> 204
-GET  /api/rm/me            -> 200 profile, or 401 when there is no session
-```
+        log.info("Seeded {} customers from {}.", data.customers().size(), DATA_FILE);
+    }
 
-Errors come back as `{ code, message, details? }`. Handle these codes:
-
-| code | status | UI behaviour |
-|---|---|---|
-| `INVALID_CREDENTIALS` | 401 | show `message` under the password field |
-| `CAPTCHA_REQUIRED` | 403 | show CAPTCHA using `details.imageDataUri`, clear the answer |
-| `ACCOUNT_LOCKED` | 423 | show a locked banner using `details.retryAfterSeconds` |
-| `MFA_CODE_INVALID` | 401 | show error, clear the code, refocus |
-| `MFA_NOT_PENDING` / `MFA_ATTEMPTS_EXHAUSTED` | 401 | show error AND return to step 1 |
-| `RESEND_TOO_SOON` | 429 | restart the countdown from `details.retryAfterSeconds` |
-
-Throw a custom `AuthError` carrying `{ code, message, details, status }` so the forms
-branch on `code`, never on message text.
-
-## Must keep working without a backend
-
-The backend may not be running. Keep a mock implementation behind a switch
-(`const USE_MOCK = !process.env.REACT_APP_API_BASE_URL`), matching the existing pattern in
-`src/services/api.js`.
-
-Mock rules: password `Avengers@2026`, OTP `123456`, any non-empty username; 3 failures →
-`CAPTCHA_REQUIRED`; 5 failures → `ACCOUNT_LOCKED`. Draw the mock CAPTCHA answer plainly on
-an inline SVG so it is readable during development. Export a `resetMockAuthState()`
-function so tests can clear the failure counter between cases.
-
-## Files to create or modify — this is the complete list
-
-```
-src/features/auth/authService.js     (rewrite)
-src/features/auth/LoginForm.jsx      (rewrite)
-src/features/auth/LoginPage.jsx      (modify)
-src/features/auth/MfaForm.jsx        (new)
-src/features/auth/CaptchaField.jsx   (new)
-src/features/auth/auth.css           (add styles)
-src/context/AuthContext.jsx          (add pendingMfa, verifyMfa, resendMfa, cancelMfa)
-src/locales/en.json                  (add login.* keys)
-src/locales/zh-CN.json               (add the SAME keys)
-package.json                         (add "proxy": "http://localhost:8080")
-```
-
-## Done when
-
-- `npm test` passes and `npm run build` compiles with no warnings.
-- The app runs and logs in with no backend, using the mock credentials above.
-- `en.json` and `zh-CN.json` have identical key sets.
-- Zero files under `backend/` have been modified. Confirm this explicitly in your summary.
-Two things to be aware of when you run it:
-
-Your existing tests will break. Any helper that logs in by typing a password and clicking "Sign in" now stops at the MFA screen. The helper needs the second step added — otherwise every test that starts from a logged-in state fails, and it'll look like the login is broken when it isn't.
-
-Copilot will probably want to "fix" the backend. It sees compile errors and tries to help. If it starts editing .java files, stop it and re-paste the constraint block — that's the main thing this prompt is guarding against.
+    private DemoDataFile read() {
+        try (InputStream in = new ClassPathResource(DATA_FILE).getInputStream()) {
+            return objectMapper.readValue(in, DemoDataFile.class);
+        } catch (IOException e) {
+            // Never fatal. A malformed demo file should not stop the application from
+            // starting — the API still works, there is just nothing in it.
+            log.error("Could not read {} — starting with an empty book.", DATA_FILE, e);
+            return null;
+        }
+    }
+}
