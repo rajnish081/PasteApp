@@ -221,246 +221,137 @@ StatementPage.jsx should end up a thin shell: state + which step renders + foote
 | `updated_at` | TIMESTAMP WITH TIME ZONE | Not Null | Date and time when the RM record was last updated |
 
 
-
-
-
 package com.sc.wealthcore.service;
 
 import com.sc.wealthcore.dto.CaptchaResponse;
-import com.sc.wealthcore.dto.LoginRequest;
-import com.sc.wealthcore.dto.LoginResponse;
-import com.sc.wealthcore.dto.MfaVerifyRequest;
-import com.sc.wealthcore.dto.RmProfile;
-import com.sc.wealthcore.entity.LoginAttempt.Outcome;
-import com.sc.wealthcore.entity.RelationshipManager;
-import com.sc.wealthcore.exception.AuthExceptions;
-import com.sc.wealthcore.repository.RelationshipManagerRepository;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
-import java.util.List;
-import java.util.Optional;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.Serializable;
+import java.security.SecureRandom;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Locale;
+import javax.imageio.ImageIO;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Owner: Rajnish — US03. Orchestrates sign-in: throttle, CAPTCHA, password, second factor.
+ * Owner: Rajnish — US03. Self-contained image CAPTCHA.
  *
- * <p>The ordering is the security design. A caller is only authenticated at the very last
- * step, in {@link #verifyMfa}: passing the password establishes nothing but a pending
- * challenge on the session, so an interrupted sign-in grants no access at all.
+ * <p>Generated in-process with java.awt: no API keys, no outbound call, and nothing to
+ * fail during an offline demo. The challenge lives on the HTTP session rather than in the
+ * database, so it expires on its own, needs no cleanup job, and cannot be solved in one
+ * browser and redeemed in another.
+ *
+ * <p>Only the answer is held server-side; the client receives an image and nothing else.
  */
 @Service
-public class AuthService {
+public class CaptchaService {
 
-    private final RelationshipManagerRepository relationshipManagers;
-    private final PasswordEncoder passwordEncoder;
-    private final LoginThrottleService throttle;
-    private final CaptchaService captcha;
-    private final MfaService mfa;
+    /** No 0/O/1/I/5/S — indistinguishable once distorted, and users get them wrong. */
+    private static final String ALPHABET = "ABCDEFGHJKLMNPQRTUVWXYZ2346789";
+    private static final int LENGTH = 5;
+    private static final int WIDTH = 190;
+    private static final int HEIGHT = 60;
+    private static final Duration TTL = Duration.ofMinutes(5);
+
+    public static final String SESSION_KEY = "wealthcore.captcha";
+
+    private final SecureRandom random = new SecureRandom();
 
     /**
-     * A real hash of a random value nobody knows, compared against when the username does
-     * not exist. Without it, "no such user" returns immediately while "wrong password"
-     * spends ~100ms hashing — a difference that is trivially measurable over a network and
-     * turns this endpoint into a user-enumeration oracle.
-     *
-     * <p>Generated here from the injected encoder rather than pasted in as a literal, so
-     * it is guaranteed to be a well-formed hash at the configured cost. A malformed
-     * literal would make {@code matches} bail out early and silently undo the defence.
+     * What the session holds. Serializable because a session may be persisted or
+     * replicated; a plain record would break the moment sessions leave memory.
      */
-    private final String dummyHash;
+    record Stored(String answer, Instant expiresAt) implements Serializable {}
 
-    public AuthService(RelationshipManagerRepository relationshipManagers,
-                       PasswordEncoder passwordEncoder,
-                       LoginThrottleService throttle,
-                       CaptchaService captcha,
-                       MfaService mfa) {
-        this.relationshipManagers = relationshipManagers;
-        this.passwordEncoder = passwordEncoder;
-        this.throttle = throttle;
-        this.captcha = captcha;
-        this.mfa = mfa;
-        this.dummyHash = passwordEncoder.encode(java.util.UUID.randomUUID().toString());
+    public CaptchaResponse issue(HttpSession session) {
+        StringBuilder text = new StringBuilder(LENGTH);
+        for (int i = 0; i < LENGTH; i++) {
+            text.append(ALPHABET.charAt(random.nextInt(ALPHABET.length())));
+        }
+        String answer = text.toString();
+
+        session.setAttribute(SESSION_KEY, new Stored(answer, Instant.now().plus(TTL)));
+        return new CaptchaResponse(render(answer), TTL.toSeconds());
     }
 
-    /** Step one: credentials (plus a CAPTCHA once the caller has been failing). */
-    @Transactional
-    public LoginResponse login(LoginRequest request, HttpServletRequest httpRequest, HttpSession session) {
-        String username = request.username().trim();
-        String ip = throttle.clientIp(httpRequest);
+    /**
+     * Verifies and consumes in one step. The challenge is removed whether or not the
+     * answer was right, so a correct answer cannot be replayed and a wrong one cannot be
+     * ground down against the same image.
+     */
+    public boolean verifyAndConsume(HttpSession session, String submitted) {
+        Object raw = session.getAttribute(SESSION_KEY);
+        session.removeAttribute(SESSION_KEY);
 
-        LoginThrottleService.Status status = throttle.statusFor(username, ip);
+        if (!(raw instanceof Stored stored) || submitted == null) return false;
+        if (Instant.now().isAfter(stored.expiresAt())) return false;
 
-        // Locked wins over everything. Note the correct password will not get past this
-        // either — that is the point of a lockout.
-        if (status.locked()) {
-            throttle.record(username, ip, Outcome.LOCKED);
-            throw new AuthExceptions.AccountLocked(throttle.lockRetryAfterSeconds(),
-                    "Locked out: " + username + " from " + ip);
-        }
+        return stored.answer().equalsIgnoreCase(submitted.trim().toUpperCase(Locale.ROOT));
+    }
 
-        // The CAPTCHA gate sits in front of the password check, so a bot cannot use this
-        // endpoint as a password oracle even at one guess per challenge.
-        if (status.captchaRequired()) {
-            boolean solved = captcha.verifyAndConsume(session, request.captchaAnswer());
-            if (!solved) {
-                throttle.record(username, ip, Outcome.CAPTCHA_FAILED);
-                CaptchaResponse fresh = captcha.issue(session);
-                throw new AuthExceptions.CaptchaRequired(
-                        fresh.imageDataUri(),
-                        fresh.expiresInSeconds(),
-                        request.captchaAnswer() == null
-                                ? "Please complete the security check."
-                                : "That security check was not correct. Try the new image.",
-                        "CAPTCHA gate for " + username + " from " + ip);
+    private String render(String text) {
+        BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            g.setColor(new Color(0xF2, 0xF6, 0xF4));
+            g.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Speckle first, so it sits behind the glyphs.
+            g.setStroke(new BasicStroke(1f));
+            for (int i = 0; i < 90; i++) {
+                g.setColor(new Color(random.nextInt(0x60) + 0x90, random.nextInt(0x60) + 0x90,
+                        random.nextInt(0x60) + 0x90));
+                int x = random.nextInt(WIDTH);
+                int y = random.nextInt(HEIGHT);
+                g.drawLine(x, y, x + random.nextInt(3), y + random.nextInt(3));
             }
+
+            int x = 18;
+            for (char c : text.toCharArray()) {
+                AffineTransform saved = g.getTransform();
+
+                // Each glyph gets its own rotation and baseline. A uniform baseline is
+                // trivially segmented and read by an off-the-shelf OCR pass.
+                double angle = (random.nextDouble() - 0.5) * 0.7;
+                int y = 40 + random.nextInt(9) - 4;
+                g.rotate(angle, x, y);
+
+                g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 32 + random.nextInt(8)));
+                g.setColor(new Color(random.nextInt(0x50), random.nextInt(0x50), random.nextInt(0x70)));
+                g.drawString(String.valueOf(c), x, y);
+
+                g.setTransform(saved);
+                x += 30 + random.nextInt(6);
+            }
+
+            // Two strokes straight through, to break the glyphs up.
+            g.setStroke(new BasicStroke(2f));
+            for (int i = 0; i < 2; i++) {
+                g.setColor(new Color(random.nextInt(0x80), random.nextInt(0x80), random.nextInt(0x80)));
+                g.drawLine(0, random.nextInt(HEIGHT), WIDTH, random.nextInt(HEIGHT));
+            }
+        } finally {
+            g.dispose();
         }
 
-        Optional<RelationshipManager> found =
-                relationshipManagers.findByUsernameIgnoreCase(username);
-
-        // Always hash something, whether or not the user exists — see dummyHash.
-        String hashToCheck = found.map(RelationshipManager::getPasswordHash).orElse(dummyHash);
-        boolean passwordOk = passwordEncoder.matches(request.password(), hashToCheck);
-
-        if (found.isEmpty() || !passwordOk) {
-            throttle.record(username, ip, Outcome.BAD_CREDENTIALS);
-            // One exception type, one message, for both causes. The log distinguishes
-            // them; the response does not.
-            throw new AuthExceptions.InvalidCredentials(found.isEmpty()
-                    ? "No such user: " + username + " from " + ip
-                    : "Wrong password for " + username + " from " + ip);
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            ImageIO.write(image, "png", out);
+            return "data:image/png;base64," + Base64.getEncoder().encodeToString(out.toByteArray());
+        } catch (IOException e) {
+            // An in-memory stream; an IOException here means something is very wrong.
+            throw new IllegalStateException("Could not render CAPTCHA", e);
         }
-
-        RelationshipManager rm = found.get();
-
-        // MFA off for this RM: sign in here. Still a fresh session, so a pre-auth session
-        // id cannot be replayed.
-        if (!rm.isMfaEnabled()) {
-            throttle.record(username, ip, Outcome.SUCCESS);
-            authenticate(rm, httpRequest);
-            return LoginResponse.signedIn(RmProfile.from(rm));
-        }
-
-        // Password was right, but nothing is granted yet.
-        mfa.startChallenge(session, rm);
-        return LoginResponse.mfaChallenge(MfaService.maskEmail(rm.getEmail()), mfa.resendCooldownSeconds());
-    }
-
-    /** Step two: the emailed code. Only here does the caller actually become authenticated. */
-    @Transactional
-    public RmProfile verifyMfa(MfaVerifyRequest request, HttpServletRequest httpRequest, HttpSession session) {
-        String ip = throttle.clientIp(httpRequest);
-        String rmId = mfa.pendingRmId(session);
-
-        MfaService.Result result = mfa.verify(session, request.code());
-
-        if (result != MfaService.Result.OK) {
-            // Recorded against the throttle counters, so guessing codes trips the same
-            // lockout that guessing passwords does.
-            throttle.record(rmId == null ? "" : rmId, ip, Outcome.MFA_FAILED);
-            throw switch (result) {
-                case NO_CHALLENGE -> new AuthExceptions.MfaNotPending("No pending code from " + ip);
-                case EXPIRED -> new AuthExceptions.MfaCodeExpired("Expired code for " + rmId);
-                case TOO_MANY_ATTEMPTS -> new AuthExceptions.MfaAttemptsExhausted("Attempts used up for " + rmId);
-                default -> new AuthExceptions.MfaCodeInvalid("Wrong code for " + rmId);
-            };
-        }
-
-        RelationshipManager rm = relationshipManagers.findById(rmId)
-                // The RM was deleted between password and code. Treat as a failed sign-in.
-                .orElseThrow(() -> new AuthExceptions.MfaNotPending("Pending RM vanished: " + rmId));
-
-        throttle.record(rm.getUsername(), ip, Outcome.SUCCESS);
-        authenticate(rm, httpRequest);
-        return RmProfile.from(rm);
-    }
-
-    /** Sends a replacement code, subject to the cooldown. */
-    @Transactional(readOnly = true)
-    public String resendMfa(HttpSession session) {
-        String rmId = mfa.pendingRmId(session);
-        if (rmId == null) {
-            throw new AuthExceptions.MfaNotPending("Resend with no pending challenge");
-        }
-
-        long wait = mfa.resendWaitSeconds(session);
-        if (wait > 0) {
-            throw new AuthExceptions.ResendTooSoon(wait, "Resend too soon for " + rmId);
-        }
-
-        RelationshipManager rm = relationshipManagers.findById(rmId)
-                .orElseThrow(() -> new AuthExceptions.MfaNotPending("Pending RM vanished: " + rmId));
-
-        // Issues a brand new code and invalidates the previous one.
-        mfa.startChallenge(session, rm);
-        return MfaService.maskEmail(rm.getEmail());
-    }
-
-    public void logout(HttpSession session) {
-        mfa.clear(session);
-        SecurityContextHolder.clearContext();
-        // Kills the server-side session outright, so the cookie the browser keeps is inert.
-        session.invalidate();
-    }
-
-    @Transactional(readOnly = true)
-    public RmProfile currentRm(Authentication authentication) {
-        return RmProfile.from(requireRm(authentication));
-    }
-
-    /**
-     * The signed-in RM's id, for the endpoints that scope their queries by it.
-     *
-     * <p>The session carries a username, not an id, so this resolves one to the other.
-     * Every data endpoint goes through here rather than trusting an id from the request —
-     * an RM id taken from a path or a body would let anyone read another RM's book.
-     */
-    @Transactional(readOnly = true)
-    public String currentRmId(Authentication authentication) {
-        return requireRm(authentication).getId();
-    }
-
-    private RelationshipManager requireRm(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()) {
-            throw new AuthExceptions.InvalidCredentials("No authentication on the request");
-        }
-        return relationshipManagers.findByUsernameIgnoreCase(authentication.getName())
-                .orElseThrow(() -> new AuthExceptions.InvalidCredentials(
-                        "Session references a missing RM: " + authentication.getName()));
-    }
-
-    /**
-     * Establishes the authenticated session.
-     *
-     * <p>{@code changeSessionId()} is the session-fixation defence: whatever session id
-     * carried the pre-auth challenge is discarded and a new one issued, so an id an
-     * attacker planted or observed beforehand is worthless.
-     *
-     * <p>The context is saved explicitly because this authentication does not run through
-     * a Spring Security filter — without the save it would live only for this request and
-     * the very next call would be a 401.
-     */
-    private void authenticate(RelationshipManager rm, HttpServletRequest httpRequest) {
-        httpRequest.changeSessionId();
-
-        User principal = new User(rm.getUsername(), rm.getPasswordHash(), List.of());
-        Authentication authentication =
-                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
-
-        SecurityContext context = SecurityContextHolder.createEmptyContext();
-        context.setAuthentication(authentication);
-        SecurityContextHolder.setContext(context);
-
-        httpRequest.getSession().setAttribute(
-                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
     }
 }
-
