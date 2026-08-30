@@ -313,3 +313,33 @@ public class AuthController {
 
 
 
+import com.sc.wealthcore.dto.RmProfile;
+import com.sc.wealthcore.service.AuthService;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Owner: Rajnish — US03. The signed-in RM.
+ *
+ * <p>Outside {@code /auth/**}, so the security config requires a session: an
+ * unauthenticated call gets a 401 from the entry point before it ever reaches this class.
+ * The React app calls this on boot to restore a session, which is what replaced trusting
+ * a user object out of localStorage.
+ */
+@RestController
+@RequestMapping("/rm")
+public class RmController {
+
+    private final AuthService authService;
+
+    public RmController(AuthService authService) {
+        this.authService = authService;
+    }
+
+    @GetMapping("/me")
+    public RmProfile me(Authentication authentication) {
+        return authService.currentRm(authentication);
+    }
+}
