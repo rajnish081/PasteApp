@@ -194,3 +194,19 @@ real and not decorative.
 `mvn clean install` passes, the Advice wizard works end to end against real data with the
 mock still functional when `REACT_APP_API_BASE_URL` is empty, and **no Spring Security
 dependency or config has been added**. Confirm that last point explicitly.
+
+
+
+
+What Went Well
+Set up the H2 database and created the required JPA entities.
+Implemented the initial REST APIs for the major use cases.
+Started frontend-backend integration and API testing through Swagger.
+What Can Be Improved
+Login and MFA had some implementation and integration issues that required additional debugging.
+Some entity and API contract mismatches caused integration and JPA mapping issues.
+API integration and end-to-end testing could have been started earlier.
+Further Actions
+Stabilize the login + MFA flow and complete authentication testing.
+Complete React ↔ Spring Boot integration for the major user flows.
+Increase unit/integration test coverage and verify APIs through Swagger/Postman.
