@@ -1,212 +1,181 @@
-# Task: Complete the Advice feature end to end (BACKEND API + FRONTEND INTEGRATION)
+Looking at your screenshots, the highest-leverage thing here is that your Statement page already solved preview + download. So the prompt below tells Copilot to extract and reuse that, not rebuild it — that's what guarantees the CSS matches instead of drifting.
 
-## Project facts — do not change these
+I've also folded in Akshada's five focus calculations, the Current Value vs Investments semantics, and the Save-as-Draft bug.
 
-- Java 21, Spring Boot 4 (Spring 7.x), Maven, package root `com.scb.wealthcore`
-- Entry point: `StatementGenerationApp`
-- **H2 in-memory**, `spring.jpa.hibernate.ddl-auto=update` in `application.properties`.
-  There is NO Flyway. The entity classes ARE the schema — do not add migrations, do not
-  add a `db/migration` folder, do not add a Flyway dependency.
-- Layered packages: `controller` → `service` → `repository`, plus `entity`, `dto`,
-  `exception`, `config`.
-- React frontend runs on **http://localhost:3001**, backend on **8080**.
 
-## ⛔ Security does not exist yet — read this carefully
+# Task: Complete the Advice page — focus-driven content, document preview, download
 
-Spring Security is **not** in this project yet. It is on a separate branch and will be
-merged later. So:
+## Read these first, before writing anything
 
-- **Do NOT add** `spring-boot-starter-security`, a `SecurityConfig`, JWT, filters,
-  `@PreAuthorize`, or any login endpoint. That work is done and will arrive separately.
-- **Do NOT accept `rmId` as a request parameter, path variable, or body field.**
-  That is the trap: it would work now and become an access-control hole the moment the
-  app is real, because any caller could read any RM's data by changing a number.
+1. The **Statements** feature (`localhost:3000/statements`). Its Review step renders a
+   full Standard Chartered document preview, and its Generate step offers Download and
+   Send email. **That preview and download already work. Do not reinvent them.**
+2. The existing Advice feature (`localhost:3000/advice`) — Details → Review → Dispatch.
+3. The backend `bank_data` source and its product records.
+4. The SC logo at `frontend/src/assets/images/` — use the existing asset, do not add one.
 
-Instead, create ONE seam:
+## Architectural instruction — do this first
 
-```java
-public interface CurrentRmProvider {
-    String currentRmId();
-}
-```
-
-with a temporary implementation, clearly marked:
-
-```java
-/**
- * TEMPORARY. Returns a fixed RM until the auth branch lands, at which point this class
- * is replaced by one reading the authenticated session — and every endpoint becomes
- * correctly scoped without touching a single controller or service.
- */
-@Component
-public class FixedRmProvider implements CurrentRmProvider { ... }
-```
-
-Every service takes the RM id from `CurrentRmProvider`, and **every query filters on it**
-in the WHERE clause. Write it exactly as though auth already existed. When the auth branch
-merges, one class is swapped and the whole feature is secured at once.
-
-## Entity model
-
-`backend/DummyData/*.json` already exists — `Customer.json`, `RMs.json`, `Accounts.json`,
-`Products.json`, `Product_FD.json`, `Product_MF.json`, `Product_Bonds.json`,
-`Product_Insurance.json`, `Product_portfolio.json`, `transaction.json`, `Branch.json`.
-
-**Read all of them first and derive the model from their real fields.** Do not invent one.
-Move them to `src/main/resources/` so they are on the classpath and load them on startup
-with a seeder that is guarded by a property and **idempotent** (skip if rows exist —
-otherwise every restart duplicates the data).
-
-Keep `RelationshipManager` **minimal**: id, username, name, initials, email, branch. No
-password, no MFA fields. The auth branch adds those columns, and with `ddl-auto=update`
-that merge is purely additive instead of a conflict.
-
-## The contract rule — the one that actually matters
-
-The Advice UI is already built and working on mock data. **Every field name the API
-returns must match what the frontend already reads, exactly.** One rename and the screen
-breaks silently.
-
-Before writing any DTO, open the frontend's mock data and service layer under
-`frontend/src/services/` and copy the names verbatim. Where the mock omits a key rather
-than sending null, do the same with `@JsonInclude(NON_NULL)`.
-
-- Money: `BigDecimal` end to end, serialised as a JSON **number**, never a string.
-- Dates: `LocalDate`, serialised as `YYYY-MM-DD`.
-
-## What the Advice screens need
-
-The wizard is Details → Review → Dispatch.
-
-**Details** — customer picker (search by name or id), Product Focus (one of: *Equity
-Portfolio Restructuring, Fixed Income Advisory, Wealth Preservation & Insurance,
-Retirement Planning, Alternative Investments*), Primary Language, Advice Date.
-
-**Review** — a product summary per product type with **Current Value**,
-**Investments / Contributions** and **Fees Due**, plus a Total row; a generated advice
-preview (Executive Summary + Recommended Actions); and a list of attached documents.
-
-**Dispatch** — recipient, subject, an editable message body, a "notify me when the email
-is opened" flag, and a summary showing products covered and the three totals.
-
-Endpoints (adjust names to whatever the frontend already calls):
+Extract the Statement page's document preview into a **shared, reusable component**, then
+render the Advice document through it. Something like:
 
 ```
-GET   /advices                    list, newest first
-POST  /advices                    create a draft
-GET   /advices/{id}               one advice with summary + preview
-PUT   /advices/{id}               save as draft
-GET   /advices/{id}/preview       generated preview content
-POST  /advices/{id}/send          dispatch
-GET   /customers/{id}/advice-summary   per-type totals for the Review step
+components/documents/DocumentPreview.jsx     frame: SC logo, letterhead, meta block, footer
+components/documents/DocumentPreview.css     one stylesheet, both document types
+components/documents/documentTheme.js        fonts, spacing, table styles, colours
 ```
 
-**Status lifecycle: `DRAFT → READY → SENT` (plus `FAILED`).** "Save as Draft" appears on
-both Review and Dispatch, so a partially-filled advice must persist and reload cleanly —
-do not require every field to be present to save.
+The Statement page must keep working **unchanged** after this refactor.
 
-## Three details worth getting right
+Doing it this way is the point: it is what makes the Advice document look identical to the
+Statement document, and it means the Download behaviour is shared rather than reimplemented
+and subtly different. Do not copy-paste the statement's markup into the Advice page — if
+the two diverge later, one will silently stop matching the other.
 
-1. **Aggregate the product summary in the database** with a `GROUP BY` on product type,
-   not by loading every product and summing in Java. It returns a handful of rows however
-   large the book gets.
+## Bug to fix
 
-2. **Return a masked email for display** (`p***i@w***.com`) and keep the real address
-   server-side. The Dispatch screen only ever needs to show the RM enough to recognise it;
-   the API has no reason to hand the full address to the browser.
+**"Save as Draft" currently triggers preview generation.** It must not. Separate them:
 
-3. **Send email off the request thread** (`@Async`) so a slow or dead SMTP server cannot
-   hang the dispatch response, and record the outcome against the advice. A failed send
-   must leave the record in `FAILED`, not silently look like success.
+- **Save as Draft** → persist the current form state only. No document generation, no
+  preview refresh, no navigation. Show a quiet "Draft saved" confirmation and stay put.
+  It must work from Review *and* Dispatch, and with fields still incomplete — a draft is a
+  partial thing by definition, so do not run full validation on it.
+- **Continue to Review** → generate/refresh the preview.
 
-   On "notify me when opened": store the flag and an `opened_at` column, but be aware open
-   tracking works by a tracking pixel and most mail clients block images — treat a missing
-   open as unknown, never as "not read".
+## Product Focus drives everything
 
-## Performance and schema
+Product Focus is the RM choosing *which area to advise on*. The **same customer with a
+different focus must produce a different document** — different products included,
+different calculations, different recommendations.
 
-`spring.jpa.open-in-view=false`, so resolve lazy collections inside a `@Transactional`
-service method. Two collections cannot be `LEFT JOIN FETCH`-ed in one query — that throws
-`MultipleBagFetchException`; use one query per collection over the same managed entities.
+Define this as **one data-driven configuration object**, not scattered `if`/`switch`
+blocks across components:
 
-Add `@Table(indexes = @Index(...))` for any column you filter on. With no migrations, an
-index that is not on the entity does not exist.
+| Product Focus | Products included | Headline calculations |
+|---|---|---|
+| Equity Portfolio Restructuring | Mutual Fund, Portfolio Management | Total MF value; fund allocation %; current vs recommended equity allocation |
+| Fixed Income Advisory | Bond, Fixed Deposit | Total bond value + total FD value; maturity schedule; interest income |
+| Wealth Preservation & Insurance | Insurance | Total coverage (sum assured); total premium; coverage gap |
+| Retirement Planning | Portfolio Management, Mutual Fund, Fixed Deposit | Current corpus; target corpus; monthly SIP required |
+| Alternative Investments | Portfolio Management | Alternative allocation %; recommended allocation % |
 
-## Errors
+Adding a sixth focus later must mean adding one entry to that object — nothing else.
 
-Add a `GlobalExceptionHandler` (`@RestControllerAdvice`) if there isn't one, returning a
-single shape: `{ code, message, timestamp, details? }`. Controllers never build an error
-body — they throw. Never put a stack trace, SQL, or an internal class name in a response.
+## Product Summary — the column semantics
 
-An advice id that belongs to another RM returns **404, not 403** — a 403 confirms the
-record exists.
+The table has three columns and they mean different things per focus. Get this right:
 
-## CORS
+- **Current Value** — the *latest* value, including returns, interest or growth where
+  applicable. For insurance this is the **coverage / sum assured**, not a market value.
+- **Investments / Contributions** — the *original* amount: invested, contributed, or for
+  insurance the **premium paid**.
+- **Fees Due** — outstanding fees/charges on that product; `₹0` when none apply.
 
-The frontend is on a different port, so this is cross-origin. Add a `WebMvcConfigurer`
-CORS mapping for **`http://localhost:3001`** with `allowCredentials(true)` and the
-`X-XSRF-TOKEN` header allowed.
+Only products belonging to the selected focus appear. Always render a **Total** row.
+Money as `₹` with Indian digit grouping (`₹48,72,760.00`), two decimals, right-aligned,
+tabular figures so the columns line up.
 
-Name the origin explicitly. **`allowedOrigins("*")` is rejected by browsers when
-credentials are enabled** — configuring it correctly now means nothing changes when the
-auth branch adds cookies.
+Show "All values as of {adviceDate}" under the table.
 
-## Frontend integration
+## Advice document template
 
-Do not delete the mock — it has to keep working when the backend is down.
+One template structure, five content variants. Match the Statement document's visual
+language exactly — same logo placement, letterhead, typography, table styling, footer.
 
-`.env` (committed):
+Structure:
+
 ```
-PORT=3001
-REACT_APP_API_BASE_URL=
+[SC logo]                          Wealth Core — Personalized Advice
+                                   For {customerName} (ID: {customerId})
+                                   {adviceDate}
+
+Dear {customerName},
+
+Based on your latest portfolio profile, we have prepared a recommendation
+focused on {productFocus}.
+
+── Personalized Advice Summary ──
+── Portfolio Position ──        (the Product Summary table)
+── Recommendation Focus ──      (focus-specific analysis + figures)
+── Recommended Actions ──       (bulleted, specific, with numbers)
+── Important Information ──     (disclaimer)
+
+Prepared by {rmName} · Standard Chartered Global Private Bank
 ```
 
-`.env.local` (gitignored — add it to `.gitignore` if missing):
-```
-REACT_APP_API_BASE_URL=http://localhost:8080/api
-```
+Content per focus — use the customer's real figures, never placeholders:
 
-```js
-const BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
-const USE_MOCK = !BASE_URL;
-```
+- **Equity Portfolio Restructuring** — current vs recommended equity allocation with real
+  percentages; identify overexposure and concentration; name underperforming holdings;
+  suggest rebalancing. *"Current Equity Allocation: 85% → Recommended: 65%"*
+- **Fixed Income Advisory** — bond and FD holdings review; maturity/renewal planning;
+  interest income optimisation. *"Renew FD maturing {date} at a longer tenure"*
+- **Wealth Preservation & Insurance** — coverage vs recommended, and the **gap** between
+  them; protection planning. *"Current Coverage ₹50L → Recommended ₹1Cr"*
+- **Retirement Planning** — current corpus, target corpus, and the **monthly SIP required
+  to close the difference**; allocation by age. *"Target ₹5Cr · Monthly SIP ₹50,000"*
+- **Alternative Investments** — current alternative allocation %, diversification
+  opportunities, risk-return comparison. *"Allocate 10% to REITs"*
 
-Three CRA rules: only `REACT_APP_`-prefixed variables are exposed; **the dev server must
-be restarted** after an `.env` change; `.env.local` overrides `.env` and is not committed.
+**Every number in the document must be computed from real customer data.** If a figure
+cannot be derived, omit that line — never print a hard-coded example value into a document
+that goes to a customer.
 
-Use `credentials: 'include'` on every request now — harmless without auth, and required
-the moment it lands.
+## Preview and Download — match the Statement page
 
-**Do not add mapping or renaming layers in the frontend.** If a field looks wrong, the API
-is wrong and that is a backend fix. Every screen that fetches needs a loading state and a
-visible error state — real calls are slow and can fail; the mock never did.
+- **Multi-page preview** with `‹ 1/2 ›` paging and an **Expand preview** control, exactly
+  as Statements does.
+- **Download** produces the PDF the same way the Statement page does. Reuse that code
+  path. If it is print-to-PDF, add a print stylesheet that hides nav, buttons and the
+  stepper, forces page breaks between sections, and keeps table headers repeating across
+  pages (`thead { display: table-header-group }`).
+- **Documents Included** — list generated documents with remove (×) and add (+), as now.
 
-## Tests
+## Dispatch step
 
-`@SpringBootTest` + `MockMvc`, `@ActiveProfiles("test")`. Cover: create → save draft →
-reload → dispatch; the draft lifecycle; per-type totals matching the seed data; 404 for an
-unknown id; money serialising as a number, not a string; and **an advice belonging to
-another RM being invisible** — that test is what proves the `CurrentRmProvider` scoping is
-real and not decorative.
+Keep what exists: masked recipient (`r***a@g***.com`), subject defaulting to
+`Your Wealth Core Advice - {adviceDate}`, editable message body, "Notify me when the email
+is opened", the summary panel (Products Covered, Total Current Value, Investments /
+Contributions, Fees Due), and the security note about password-protected attachments.
+
+**Mask the recipient server-side.** The browser has no reason to hold the customer's full
+address — the backend already has it to send with.
+
+On success: "Advice dispatched", the Document ID, and "Generate another" — which must
+reset the **whole** wizard, not just the customer.
+
+## CSS consistency — non-negotiable
+
+Take colours, spacing, fonts, buttons, tables, pagination and the stepper from the
+**existing shared styles**. Do not introduce new hex values, new button variants, or a new
+table style. If something you need does not exist, add it to the shared layer so every page
+gets it — not to an Advice-only stylesheet.
+
+The Advice document and the Statement document must be **visually indistinguishable** apart
+from their content. Put them side by side and check.
+
+## Data and state
+
+- Fetch product data from the backend (`bank_data`); do not compute customer figures in the
+  browser from hard-coded values.
+- Changing the **Product Focus must invalidate the generated preview** — a stale preview
+  from a previous focus is the worst failure here, because it looks correct and is not.
+- Changing the customer resets focus, preview and documents.
+- Every fetch needs a **loading state and a visible error state**. A silently empty Product
+  Summary table looks like a customer with no holdings.
 
 ## Done when
 
-`mvn clean install` passes, the Advice wizard works end to end against real data with the
-mock still functional when `REACT_APP_API_BASE_URL` is empty, and **no Spring Security
-dependency or config has been added**. Confirm that last point explicitly.
+1. The same customer under all five focuses produces five genuinely different documents
+   with correct, different figures.
+2. The Advice document is visually identical to the Statement document in style.
+3. Download works from Advice exactly as it does from Statements.
+4. **Save as Draft persists without generating a preview**, from both Review and Dispatch,
+   with incomplete fields.
+5. The Statements page still works, unchanged.
+6. `npm run build` compiles with no warnings.
+Two things I'd flag before you run it:
 
+The "Fees Due" column needs a source. I've told Copilot to read it from the backend and show ₹0 when absent — but if bank_data has no fee field, it'll invent one. Worth checking that field exists first, or the column will quietly be zeros everywhere.
 
-
-
-What Went Well
-Set up the H2 database and created the required JPA entities.
-Implemented the initial REST APIs for the major use cases.
-Started frontend-backend integration and API testing through Swagger.
-What Can Be Improved
-Login and MFA had some implementation and integration issues that required additional debugging.
-Some entity and API contract mismatches caused integration and JPA mapping issues.
-API integration and end-to-end testing could have been started earlier.
-Further Actions
-Stabilize the login + MFA flow and complete authentication testing.
-Complete React ↔ Spring Boot integration for the major user flows.
-Increase unit/integration test coverage and verify APIs through Swagger/Postman.
+Stale preview after changing focus is the bug most likely to embarrass you in a demo. If the RM picks Equity, previews, then switches to Retirement without regenerating, the document still says Equity — and it looks completely convincing. That's why it's called out explicitly rather than left to Copilot's judgement.
